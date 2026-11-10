@@ -42,8 +42,9 @@ def make_short(src: Path, dst: Path, vertical: bool, max_seconds: int) -> Path:
     """Re-encode to a Shorts-friendly MP4. With vertical=True a 16:9 clip is placed
     on a blurred, zoomed copy of itself in a 1080x1920 frame."""
     if vertical:
-        vf = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
-              "boxblur=20:2[bg];[0:v]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]")
+        # blur a small copy and scale it up: looks the same, ~5x faster than blurring at full size
+        vf = ("[0:v]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:1,"
+              "scale=1080:1920[bg];[0:v]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]")
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-t", str(max_seconds),
                "-filter_complex", vf, "-map", "[v]", "-map", "0:a?"]
     else:

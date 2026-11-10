@@ -140,6 +140,7 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
                 title, desc, tags = captions.build_youtube_fields(clip, cap)
                 new_items.append({
                     "key": f"{clip.platform}:{clip.clip_id}", "creator": creator, "platform": clip.platform,
+                    "channel": clip.channel, "ai_caption": bool(cap.get("ai")),
                     "rank": rank, "date": day_label, "file_name": name, "drive_file_id": file_id,
                     "source_url": clip.url, "source_title": clip.title, "views": clip.views,
                     "game": clip.game, "yt_title": title, "yt_description": desc, "yt_tags": tags,
@@ -163,6 +164,20 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
 
 
 # ---------------------------------------------------------------- post
+def recaption(cfg: dict, item: dict, channels: dict) -> None:
+    """Retry the AI caption for a clip whose caption fell back to the raw title at fetch time."""
+    clip = sources.Clip(
+        platform=item["platform"], clip_id=item["key"].split(":", 1)[1], creator=item["creator"],
+        channel=item.get("channel") or channels.get(item["creator"], item["creator"].lower()),
+        title=item.get("source_title", ""), url=item["source_url"], views=item.get("views", 0),
+        created_at="", game=item.get("game", ""),
+    )
+    cap = captions.generate(clip, cfg["captions"]["language"], cfg["captions"]["model"])
+    title, desc, tags = captions.build_youtube_fields(clip, cap)
+    item.update(yt_title=title, yt_description=desc, yt_tags=tags, ai_caption=bool(cap.get("ai")))
+    log.info("Re-captioned %s -> \"%s\" (ai=%s)", item["file_name"], title, item["ai_caption"])
+
+
 def cmd_post(cfg: dict) -> None:
     from googleapiclient.errors import HttpError
 
@@ -180,9 +195,17 @@ def cmd_post(cfg: dict) -> None:
 
     yt = YouTube()
     y = cfg["youtube"]
+    channels = {c["name"]: c["channel"] for c in cfg["creators"]}
     with tempfile.TemporaryDirectory() as tmp:
         for item in due:
             path = Path(tmp) / item["file_name"]
+            if not item.get("ai_caption"):
+                recaption(cfg, item, channels)
+            if captions.is_unsafe(item["yt_title"]):
+                log.warning("Title of %s still contains a blocked word — skipping this clip", item["file_name"])
+                item["status"] = "skipped"
+                drive.write_json(QUEUE, state)
+                continue
             try:
                 drive.download(item["drive_file_id"], path)
                 vid = yt.upload(path, item["yt_title"], item["yt_description"], item["yt_tags"],

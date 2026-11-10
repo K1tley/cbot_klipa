@@ -16,7 +16,7 @@ PROMPT = """You write titles for a YouTube Shorts channel that reposts the best 
 Clip info:
 - Streamer: {creator}
 - Platform: {platform}
-- Original clip title (written by a viewer, may be slang, a meme, a typo or just emojis): {title!r}
+- Original clip title (written by a random viewer - may be slang, a meme, a typo, an inside joke or just gibberish): {title!r}
 - Game / category: {game}
 
 Write in {language}. Return ONLY a JSON object with:
@@ -26,18 +26,54 @@ Write in {language}. Return ONLY a JSON object with:
 - "line": one short sentence for the description that sets up the moment (same rule: don't invent facts).
 - "hashtags": 5-8 hashtags (without the # sign), mixing: the streamer's name, the game (if any),
   broad reach tags (e.g. shorts, twitchclips or kickclips, gaming), and 1-2 {language} tags. No spaces inside a tag.
+
+Safety rules (YouTube will penalise the channel otherwise):
+- Never repeat slurs, hate toward any group (ethnicity, religion, race, sexuality), sexual content or insults
+  aimed at a real person. If the original title has any of that, drop it and write a neutral, fun title
+  about the streamer and the game instead.
+- If the original title is gibberish (e.g. "dsadas", "xd", "wowcs02"), write a neutral title from the
+  streamer and game without inventing what happens.
 """
+
+# Words that must never reach YouTube when the AI step is unavailable (compared without accents, lowercase).
+BLOCKED = {
+    "nword", "nigga", "nigger", "negr", "negri", "cigan", "cikan", "cigani", "cikani", "zid", "zide", "zidi",
+    "zidak", "buzna", "buzerant", "teplous", "retard", "rasa", "sex", "sexy", "porn", "porno", "naha", "nahy",
+    "kurva", "pica", "pici", "kokot", "debil", "hitler", "nazi",
+}
+
+
+def _ascii(text: str) -> str:
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
 
 
 def _slug_tag(text: str) -> str:
-    t = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
-    return re.sub(r"[^A-Za-z0-9]", "", t)
+    return re.sub(r"[^A-Za-z0-9]", "", _ascii(text))
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", _ascii(text).lower())
+
+
+def is_unsafe(text: str) -> bool:
+    words = _words(text)
+    joined = "".join(words)
+    return any(w in BLOCKED for w in words) or "nword" in joined or "nigg" in joined
+
+
+def _is_gibberish(text: str) -> bool:
+    real = [w for w in _words(text) if len(w) >= 3 and re.search(r"[aeiouy]", w)]
+    return len(real) < 2
 
 
 def _fallback(clip: Clip) -> dict:
-    title = clip.title or f"{clip.creator} clip"
+    title = (clip.title or "").strip()
+    if not title or is_unsafe(title) or _is_gibberish(title):
+        title = f"{clip.creator} – {clip.game}" if clip.game else f"{clip.creator} – moment ze streamu"
+    else:
+        title = f"{title} | {clip.creator}"
     tags = [clip.creator, clip.game, "shorts", f"{clip.platform}clips", "gaming", "cesko", "czstreamer"]
-    return {"title": f"{title} | {clip.creator}", "line": "",
+    return {"title": title, "line": "", "ai": False,
             "hashtags": [t for t in (_slug_tag(x) for x in tags if x) if t]}
 
 
@@ -54,19 +90,23 @@ def generate(clip: Clip, language: str, model: str) -> dict:
                 creator=clip.creator, platform=clip.platform.capitalize(), title=clip.title,
                 game=clip.game or "unknown", language=language)}],
         )
-        text = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text")
+        text = "".join(getattr(b, "text", "") or "" for b in msg.content if getattr(b, "type", "") == "text")
         start, end = text.find("{"), text.rfind("}")
         if start == -1 or end <= start:
-            log.warning("No JSON in caption reply (stop_reason=%s, blocks=%s): %r",
-                        msg.stop_reason, [getattr(b, "type", "?") for b in msg.content], text[:300])
+            log.warning("No JSON in caption reply for %s (stop_reason=%s, blocks=%s): %r",
+                        clip.clip_id, msg.stop_reason, [getattr(b, "type", "?") for b in msg.content], text[:300])
             return _fallback(clip)
         data = json.loads(text[start: end + 1])
         data["hashtags"] = [h for h in (_slug_tag(str(t).lstrip("#")) for t in data.get("hashtags", [])) if h]
         if not data.get("title"):
             raise ValueError("empty title")
+        if is_unsafe(data["title"]) or is_unsafe(data.get("line", "")):
+            log.warning("AI caption for %s still contained a blocked word, using neutral title", clip.clip_id)
+            return _fallback(Clip(**{**clip.__dict__, "title": ""}))
+        data["ai"] = True
         return data
-    except Exception:  # noqa: BLE001
-        log.exception("Caption generation failed for %s, using fallback", clip.clip_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Caption generation failed for %s (%s: %s), using fallback", clip.clip_id, type(e).__name__, e)
         return _fallback(clip)
 
 
