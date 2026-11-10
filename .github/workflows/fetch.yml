@@ -2,8 +2,12 @@ name: Daily fetch (clips -> Google Drive)
 
 on:
   schedule:
-    - cron: "7 22 * * *"
-    - cron: "7 23 * * *"
+    # GitHub cron is in UTC. 04:00 in Prague is 03:00 UTC in winter and
+    # 02:00 UTC in summer, so both run and the script only works at the
+    # local hour set in config.yaml (fetch_hour). If you change fetch_hour,
+    # change these two hours too: (fetch_hour - 1) and (fetch_hour - 2), in UTC.
+    - cron: "7 2 * * *"
+    - cron: "7 3 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -12,7 +16,7 @@ on:
         default: true
 
 concurrency:
-  group: clipbot
+  group: clipbot      # never run fetch and post at the same time
   cancel-in-progress: false
 
 jobs:
