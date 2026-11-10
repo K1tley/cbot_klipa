@@ -5,9 +5,9 @@
 timezone: Europe/Prague
 
 # Daily fetch: the local hour (0-23) when clips are collected.
-# 0 = midnight. If you change this, ALSO change the cron lines in
+# 4 = 04:00. If you change this, ALSO change the cron lines in
 # .github/workflows/fetch.yml (see the comment there).
-fetch_hour: 0
+fetch_hour: 4
 
 clips_per_creator: 3      # take up to this many top clips per creator
 lookback_hours: 24        # "recent" = clips created in the last N hours
@@ -15,14 +15,13 @@ retention_days: 3         # Drive folders older than this are deleted
 drive_root_folder: ClipBot
 
 posting:
-  # Posts are spread evenly over this many hours after the fetch,
-  # but never closer together than min_interval_minutes.
-  #   15 clips -> one every 60 min   |   5 clips -> one every 3 h
-  window_hours: 15
+  # No posts during these local hours: [from, to). [2, 7] = nothing between 02:00 and 07:00.
+  quiet_hours: [2, 7]
+  # Posts start at start_hour and are spread evenly until the quiet hours begin
+  # (07:00 -> 02:00 = 19 hours), never closer together than min_interval_minutes.
+  #   19 clips -> one every 60 min   |   14 clips -> ~every 80 min   |   5 clips -> ~every 4 h
+  start_hour: 7
   min_interval_minutes: 60
-  # Optional: don't post before this local hour (e.g. 8 = start at 08:00).
-  # Leave as null to start right after the fetch.
-  start_hour: null
   max_per_run: 2          # safety cap if a scheduled run was skipped
 
 youtube:
