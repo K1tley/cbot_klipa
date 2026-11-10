@@ -70,22 +70,58 @@ def cleanup(cfg: dict, drive, state: dict, today: date) -> None:
 
 
 # ---------------------------------------------------------------- fetch
+def in_quiet(local: datetime, quiet) -> bool:
+    if not quiet:
+        return False
+    q0, q1 = int(quiet[0]), int(quiet[1])
+    h = local.hour
+    return q0 <= h < q1 if q0 < q1 else (h >= q0 or h < q1)
+
+
+def next_allowed(t: datetime, cfg: dict, tz: ZoneInfo) -> datetime:
+    """Move t forward to the end of the quiet hours if it falls inside them."""
+    quiet = cfg["posting"].get("quiet_hours")
+    local = t.astimezone(tz)
+    if not in_quiet(local, quiet):
+        return t
+    end = local.replace(hour=int(quiet[1]), minute=0, second=0, microsecond=0)
+    if end <= local:
+        end += timedelta(days=1)
+    return end.astimezone(timezone.utc)
+
+
 def schedule_times(cfg: dict, state: dict, n: int, now: datetime, tz: ZoneInfo) -> list[datetime]:
     p = cfg["posting"]
     if n == 0:
         return []
-    interval = max(timedelta(minutes=int(p["min_interval_minutes"])),
-                   timedelta(hours=float(p["window_hours"])) / n)
+    local = now.astimezone(tz)
     start = now
     if p.get("start_hour") is not None:
-        local = now.astimezone(tz)
         first = local.replace(hour=int(p["start_hour"]), minute=0, second=0, microsecond=0)
         if first > local:
             start = first.astimezone(timezone.utc)
+    start = next_allowed(start, cfg, tz)
+    min_gap = timedelta(minutes=int(p["min_interval_minutes"]))
     pending = [parse_iso(i["scheduled_at"]) for i in state["items"] if i["status"] == "pending"]
     if pending:
-        start = max(start, max(pending) + interval)
-    return [start + k * interval for k in range(n)]
+        start = next_allowed(max(start, max(pending) + min_gap), cfg, tz)
+    # length of the posting window: from start until the next quiet period begins
+    quiet = p.get("quiet_hours")
+    if quiet:
+        s_local = start.astimezone(tz)
+        q_start = s_local.replace(hour=int(quiet[0]), minute=0, second=0, microsecond=0)
+        if q_start <= s_local:
+            q_start += timedelta(days=1)
+        window = q_start - s_local
+    else:
+        window = timedelta(hours=24)
+    interval = max(min_gap, window / n)
+    times, t = [], start
+    for _ in range(n):
+        t = next_allowed(t, cfg, tz)
+        times.append(t)
+        t = t + interval
+    return times
 
 
 def cmd_fetch(cfg: dict, force: bool) -> None:
@@ -189,6 +225,10 @@ def cmd_post(cfg: dict) -> None:
     due = sorted((i for i in state["items"] if i["status"] == "pending" and i["scheduled_at"]
                   and parse_iso(i["scheduled_at"]) <= now), key=lambda i: i["scheduled_at"])
     due = due[: int(cfg["posting"]["max_per_run"])]
+    local_now = now.astimezone(ZoneInfo(cfg["timezone"]))
+    if due and in_quiet(local_now, cfg["posting"].get("quiet_hours")):
+        log.info("Quiet hours (%s) — %d clip(s) wait until morning.", local_now.strftime("%H:%M"), len(due))
+        return
     if not due:
         log.info("Nothing due to post.")
         return
