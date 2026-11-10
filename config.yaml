@@ -26,7 +26,7 @@ posting:
   max_per_run: 2          # safety cap if a scheduled run was skipped
 
 youtube:
-  privacy: public         # public | unlisted | private
+  privacy: private         # public | unlisted | private
   category_id: "20"       # 20 = Gaming
   vertical: true          # convert 16:9 clips to 9:16 (blurred background) so they count as Shorts
   max_seconds: 179        # Shorts limit is 3 minutes
