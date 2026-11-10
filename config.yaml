@@ -1,0 +1,58 @@
+# ============================================================
+#  ClipBot configuration — edit this file to change behaviour
+# ============================================================
+
+timezone: Europe/Prague
+
+# Daily fetch: the local hour (0-23) when clips are collected.
+# 0 = midnight. If you change this, ALSO change the cron lines in
+# .github/workflows/fetch.yml (see the comment there).
+fetch_hour: 0
+
+clips_per_creator: 3      # take up to this many top clips per creator
+lookback_hours: 24        # "recent" = clips created in the last N hours
+retention_days: 3         # Drive folders older than this are deleted
+drive_root_folder: ClipBot
+
+posting:
+  # Posts are spread evenly over this many hours after the fetch,
+  # but never closer together than min_interval_minutes.
+  #   15 clips -> one every 60 min   |   5 clips -> one every 3 h
+  window_hours: 15
+  min_interval_minutes: 60
+  # Optional: don't post before this local hour (e.g. 8 = start at 08:00).
+  # Leave as null to start right after the fetch.
+  start_hour: null
+  max_per_run: 2          # safety cap if a scheduled run was skipped
+
+youtube:
+  privacy: public         # public | unlisted | private
+  category_id: "20"       # 20 = Gaming
+  vertical: true          # convert 16:9 clips to 9:16 (blurred background) so they count as Shorts
+  max_seconds: 179        # Shorts limit is 3 minutes
+
+captions:
+  language: Czech         # language of the YouTube title/description
+  model: claude-haiku-5-5 # Anthropic model used for captions + hashtags
+
+# ------------------------------------------------------------
+#  Creators to follow.
+#  platform: twitch | kick
+#  channel:  the login/slug from the URL (twitch.tv/<channel>, kick.com/<channel>)
+# ------------------------------------------------------------
+creators:
+  - name: Agraelus
+    platform: twitch
+    channel: agraelus
+  - name: Herdyn
+    platform: twitch
+    channel: herdyn
+  - name: CzechCloud
+    platform: kick
+    channel: czechcloud
+  - name: FattyPillow
+    platform: kick
+    channel: fattypillow
+  - name: Restt
+    platform: kick
+    channel: restt
