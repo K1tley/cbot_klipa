@@ -2,9 +2,9 @@ name: Hourly post (Google Drive -> YouTube)
 
 on:
   schedule:
-    # every hour at :17, except Prague quiet hours (02:00-07:00) to save GitHub minutes.
+    # every 30 min (:17 and :47), except Prague quiet hours (02:00-07:00) to save GitHub minutes.
     # UTC hours 0,5-23 cover 07:00-01:59 Prague in both winter and summer time.
-    - cron: "17 0,5-23 * * *"
+    - cron: "17,47 0,5-23 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
