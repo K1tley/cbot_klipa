@@ -48,13 +48,19 @@ def generate(clip: Clip, language: str, model: str) -> dict:
         import anthropic
         client = anthropic.Anthropic()
         msg = client.messages.create(
-            model=model, max_tokens=400,
+            model=model, max_tokens=2000,
+            system="You are a caption writer. Reply with one JSON object and nothing else - no prose, no code fences.",
             messages=[{"role": "user", "content": PROMPT.format(
                 creator=clip.creator, platform=clip.platform.capitalize(), title=clip.title,
                 game=clip.game or "unknown", language=language)}],
         )
-        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
-        data = json.loads(text[text.index("{"): text.rindex("}") + 1])
+        text = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text")
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            log.warning("No JSON in caption reply (stop_reason=%s, blocks=%s): %r",
+                        msg.stop_reason, [getattr(b, "type", "?") for b in msg.content], text[:300])
+            return _fallback(clip)
+        data = json.loads(text[start: end + 1])
         data["hashtags"] = [h for h in (_slug_tag(str(t).lstrip("#")) for t in data.get("hashtags", [])) if h]
         if not data.get("title"):
             raise ValueError("empty title")
