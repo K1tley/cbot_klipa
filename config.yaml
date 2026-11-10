@@ -19,9 +19,10 @@ posting:
   quiet_hours: [2, 7]
   # Posts start at start_hour and are spread evenly until the quiet hours begin
   # (07:00 -> 02:00 = 19 hours), never closer together than min_interval_minutes.
-  #   19 clips -> one every 60 min   |   14 clips -> ~every 80 min   |   5 clips -> ~every 4 h
+  # With 30 min that's up to 38 clips a day:
+  #   38 clips -> every 30 min | 19 clips -> every 60 min | 14 clips -> ~every 80 min | 5 clips -> ~every 4 h
   start_hour: 7
-  min_interval_minutes: 60
+  min_interval_minutes: 30
   max_per_run: 2          # safety cap if a scheduled run was skipped
 
 youtube:
