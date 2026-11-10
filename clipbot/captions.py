@@ -19,11 +19,15 @@ Clip info:
 - Original clip title (written by a random viewer - may be slang, a meme, a typo, an inside joke or just gibberish): {title!r}
 - Game / category: {game}
 
-Write in {language}. Return ONLY a JSON object with:
+Write in natural, fluent, grammatically correct {language}, the way a Czech/Slovak gaming fan would write
+(casual is fine, slang is fine). Proofread names: the streamer is "{creator}" - spell it exactly like that.
+Return ONLY a JSON object with:
 - "title": a catchy Shorts title, max 70 characters. Stay faithful to the original clip title's meaning -
   rephrase or tidy it, but don't invent events that the title doesn't suggest. Include the streamer's name
   if it fits naturally. No hashtags in the title. Max one emoji.
-- "line": one short sentence for the description that sets up the moment (same rule: don't invent facts).
+- "line": one short, natural sentence for the description that adds something the title doesn't
+  (context, a reaction, a question to viewers). If you have nothing meaningful to add, return "".
+  Never write filler like "Clip from the stream of X playing Y".
 - "hashtags": 5-8 hashtags (without the # sign), mixing: the streamer's name, the game (if any),
   broad reach tags (e.g. shorts, twitchclips or kickclips, gaming), and 1-2 {language} tags. No spaces inside a tag.
 
