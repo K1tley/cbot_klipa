@@ -14,26 +14,29 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBa
 
 log = logging.getLogger(__name__)
 
-SCOPES = [
-    "https://www.googleapis.com/auth/drive.file",      # only files ClipBot itself creates
-    "https://www.googleapis.com/auth/youtube.upload",
-]
+# Google no longer allows these two scopes in one login, so there are two tokens:
+#   GOOGLE_REFRESH_TOKEN  -> Drive   (drive.file = only files ClipBot itself creates)
+#   YOUTUBE_REFRESH_TOKEN -> YouTube (youtube.upload)
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 FOLDER = "application/vnd.google-apps.folder"
 
 
-def _creds(refresh_env: str) -> Credentials:
-    token = os.environ.get(refresh_env) or os.environ["GOOGLE_REFRESH_TOKEN"]
+def _creds(refresh_env: str, scopes: list[str]) -> Credentials:
+    token = os.environ.get(refresh_env)
+    if not token:
+        raise RuntimeError(f"GitHub secret {refresh_env} is missing")
     return Credentials(
         token=None, refresh_token=token,
         client_id=os.environ["GOOGLE_CLIENT_ID"], client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
-        token_uri="https://oauth2.googleapis.com/token", scopes=SCOPES,
+        token_uri="https://oauth2.googleapis.com/token", scopes=scopes,
     )
 
 
 # ---------------------------------------------------------------- Drive
 class Drive:
     def __init__(self, root_name: str) -> None:
-        self.svc = build("drive", "v3", credentials=_creds("GOOGLE_REFRESH_TOKEN"), cache_discovery=False)
+        self.svc = build("drive", "v3", credentials=_creds("GOOGLE_REFRESH_TOKEN", DRIVE_SCOPES), cache_discovery=False)
         self.root = self.folder(root_name, None)
 
     def _find(self, name: str, parent: str | None, mime: str | None = None) -> str | None:
@@ -121,7 +124,7 @@ class Drive:
 # ---------------------------------------------------------------- YouTube
 class YouTube:
     def __init__(self) -> None:
-        self.svc = build("youtube", "v3", credentials=_creds("YOUTUBE_REFRESH_TOKEN"), cache_discovery=False)
+        self.svc = build("youtube", "v3", credentials=_creds("YOUTUBE_REFRESH_TOKEN", YOUTUBE_SCOPES), cache_discovery=False)
 
     def upload(self, path: Path, title: str, description: str, tags: list[str],
                category_id: str, privacy: str) -> str:
