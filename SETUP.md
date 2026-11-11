@@ -2,14 +2,16 @@
 
 ClipBot runs for free on **GitHub Actions**, so your computer doesn't need to be on.
 
-* **Every night at 00:00 (Prague):** it finds the 3 most-viewed clips from the last 24 h for each creator in
-  `config.yaml`. It converts them to vertical Shorts and saves them to Google Drive as
-  `ClipBot/<Creator>/<date>/<Creator>-<date>-clip1.mp4`. Then it writes a title, description and hashtags for
-  each clip and queues them. It also deletes Drive folders older than 3 days.
-* **Every hour:** it uploads the clips that are due to YouTube, spread out over the day
-  (15 clips = about 1 per hour, fewer clips = bigger gaps).
+* **Every night at 04:00 (Prague):** it finds the 3 most-viewed clips from the last 24 h for each creator in
+  `config.yaml`. It converts them to vertical Shorts (blurred, +20 % saturated background, your logo on top) and
+  saves them to Google Drive as `ClipBot/<Creator>/<date>/<Creator>-<date>-clip1.mp4`. Then it writes a title,
+  description and hashtags for each clip and queues them. It also deletes Drive folders older than 3 days.
+* **Every 30 minutes (07:00–02:00):** it uploads the Shorts that are due, spread evenly between 07:00 and 02:00
+  (at least 30 min apart, so at most 38 a day). Nothing is posted between 02:00 and 07:00.
+* **Every night at ~04:37:** it builds a **5–20 minute horizontal compilation** of the day's best CZ/SK clips
+  (see "Daily compilation" below) and uploads it at **17:00 as private**, so you can check it and publish it at 18:00.
 
-The one-time setup takes about 30–45 minutes. You'll collect **6 secret values** along the way. Paste them into a
+The one-time setup takes about 30–45 minutes. You'll collect **7 secret values** along the way. Paste them into a
 notes file as you go:
 
 | Secret name | Where it comes from |
@@ -18,7 +20,8 @@ notes file as you go:
 | `TWITCH_CLIENT_SECRET` | Step 2 |
 | `GOOGLE_CLIENT_ID` | Step 3 |
 | `GOOGLE_CLIENT_SECRET` | Step 3 |
-| `GOOGLE_REFRESH_TOKEN` | Step 3 |
+| `GOOGLE_REFRESH_TOKEN` | Step 3 (Drive) |
+| `YOUTUBE_REFRESH_TOKEN` | Step 3 (YouTube) |
 | `ANTHROPIC_API_KEY` | Step 4 (optional, but needed for good captions) |
 
 ---
@@ -66,18 +69,18 @@ notes file as you go:
 ### 3d. Get the refresh token (no installs needed)
 1. Open <https://developers.google.com/oauthplayground>.
 2. Click the ⚙️ gear (top right), tick **Use your own OAuth credentials**, and paste your Client ID and Secret.
-3. In the box under the list on the left (*Input your own scopes*), paste:
-   ```
-   https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/youtube.upload
-   ```
-   Then click **Authorize APIs**.
+3. You'll do steps 3–6 **twice**, because Google doesn't allow both permissions in one login.
+   In the box under the list on the left (*Input your own scopes*), paste **only**
+   `https://www.googleapis.com/auth/drive.file` the first time. The token you get from that is **`GOOGLE_REFRESH_TOKEN`**.
+   The second time, paste **only** `https://www.googleapis.com/auth/youtube.upload`. That token is **`YOUTUBE_REFRESH_TOKEN`**.
+   Each time, click **Authorize APIs**.
 4. Pick your Google account. If you have more than one YouTube channel, pick the **channel** you want to post to.
 5. You'll see *"Google hasn't verified this app"*. Click **Advanced → Go to ClipBot (unsafe)**. This is your own app,
    so that's fine. Tick all permissions and click **Continue**.
 6. Click **Exchange authorization code for tokens** and copy the **Refresh token**.
 
-> Do you want Drive on a different Google account than YouTube? Repeat 3d while logged into the YouTube account,
-> and save that second token as an extra secret called `YOUTUBE_REFRESH_TOKEN`.
+> Before the second round, click ⚙️ and make sure your own credentials are still ticked. Then click
+> **Step 1** on the left to start again. Drive and YouTube can be on different Google accounts if you want.
 
 ClipBot only gets the `drive.file` permission. That means it can see **only the files it creates** (the `ClipBot`
 folder), not the rest of your Drive. So let the bot create that folder itself. Don't create it by hand.
@@ -121,9 +124,24 @@ Everything is in `config.yaml`:
   `twitch.tv/<channel>` or `kick.com/<channel>`. Open each one in a browser once to check it's right.
 * **Fetch time:** change `fetch_hour`, and **also** the two `cron:` lines in `.github/workflows/fetch.yml`
   (the comment there explains how).
-* **Posting rhythm:** `posting.window_hours` (how many hours the posts are spread over), `min_interval_minutes`,
-  and `start_hour` (for example `8` means nothing posts before 08:00).
-* **Caption language:** `captions.language`.
+* **Posting rhythm:** `posting.quiet_hours` (no posts in that range), `start_hour`, `min_interval_minutes`.
+* **Logo and look:** `overlay:` (image, position, width, opacity) and `youtube.background_saturation`.
+* **Caption language and model:** `captions.language`, `captions.model`.
+
+## Daily compilation
+
+* **Which channels:** every 2 hours ClipBot asks Twitch who is streaming in Czech or Slovak right now and remembers
+  those channels in `ClipBot/channels.json` on Drive (no manual list needed). The Shorts creators are always included.
+  Kick can't be searched by language, so add extra Kick channels under `compilation.extra_channels`.
+* **What counts as popular:** each clip's views divided by that streamer's usual clip views (the average of the last
+  14 days). `score_threshold: 2.0` = at least twice as many views as usual. On a thin day the bar is lowered step by step
+  until there are at least `min_minutes` of clips; below that, no video is made that day.
+* **Order:** the strongest clip opens the video, the other highlights are spread through it, everything else is
+  shuffled, and the same streamer never appears twice in a row (max `max_clips_per_streamer` per streamer).
+* **Look:** 1080p30, the streamer's name in the corner for the first 5 s of each clip, your logo top-right, even volume.
+  Thumbnail = a frame from the opening clip + big text + logo (needs a phone-verified YouTube channel).
+* **Run it by hand:** Actions → **Daily compilation** → Run workflow. It uploads at the next 17:00 (or right away
+  if it's later than that).
 
 To see the queue, open the `ClipBot/queue.json` file in Drive. Each clip there has its planned time, status
 (`pending` / `posted` / `failed`), title and YouTube ID.

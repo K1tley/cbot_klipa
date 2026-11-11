@@ -65,3 +65,40 @@ creators:
   - name: Restt
     platform: kick
     channel: restt
+
+# ------------------------------------------------------------
+#  Daily long compilation (horizontal YouTube video)
+# ------------------------------------------------------------
+compilation:
+  enabled: true
+  hour: 4                  # built at 04:xx (after the Shorts fetch). Change compile.yml cron too.
+  upload_hour: 17          # uploaded at 17:00 ...
+  privacy: private         # ... as private, so you can check it and publish it yourself
+  first_episode: 1         # title ends with "| Klipy dne #N"; N counts up with every uploaded compilation
+  min_minutes: 5           # shorter than this (on a thin day) -> no video that day
+  max_minutes: 20
+  score_threshold: 2.0     # "popular" = at least 2x the views that streamer's clips normally get
+  min_views: 30            # ignore clips with fewer views than this, whatever the score
+  min_baseline: 10         # floor for a tiny channel's average, so 12 views isn't "5x normal"
+  clips_per_channel: 10    # look at each channel's top N clips of the day
+  max_clips_per_streamer: 4
+  max_clip_seconds: 60     # longer clips are cut at this length
+  name_tag: true           # streamer name in the bottom-left corner ...
+  name_tag_seconds: 5      # ... for the first N seconds of each clip (0 = whole clip)
+  crf: 23                  # video quality (lower = better/bigger). 23 = ~0.7 GB for 20 min
+  logo:
+    image: logo.png
+    width: 160
+    opacity: 0.9
+  discover:                # finds CZ/SK Twitch channels automatically from live streams
+    languages: [cs, sk]
+    every_hours: 2
+    min_viewers: 20        # only remember channels with at least this many live viewers
+    active_days: 14        # forget channels not seen live for this long
+    max_channels: 150      # scan at most this many (biggest first)
+  # Kick can't be searched by language - add Kick (or extra Twitch) channels here by hand.
+  # The creators from the Shorts list above are always included automatically.
+  extra_channels:
+    # - name: SomeStreamer
+    #   platform: kick
+    #   channel: somestreamer
