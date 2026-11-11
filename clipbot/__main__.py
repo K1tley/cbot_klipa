@@ -149,7 +149,8 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
 
     lookback = timedelta(hours=float(cfg["lookback_hours"]))
     day_label = (local - lookback).date().isoformat()  # date the clips are from
-    clips = sources.collect(cfg["creators"], now - lookback, now, int(cfg["clips_per_creator"]))
+    clips = sources.collect(cfg["creators"], now - lookback, now, int(cfg["clips_per_creator"]),
+                            cfg.get("clip_length"))
     clips = [c for c in clips if f"{c.platform}:{c.clip_id}" not in state["seen"]]
 
     by_creator: dict[str, list] = defaultdict(list)
@@ -166,6 +167,11 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
                 raw, final = tmp / f"raw-{clip.clip_id}.mp4", tmp / name
                 if not media.download(clip, raw):
                     log.error("Could not download %s (%s)", clip.url, creator)
+                    continue
+                real = media.duration(raw)
+                if real and sources.length_factor(real, cfg.get("clip_length")) is None:
+                    log.info("Skipping %s: %.0f s is over the length limit", clip.url, real)
+                    raw.unlink(missing_ok=True)
                     continue
                 try:
                     media.make_short(raw, final, bool(cfg["youtube"]["vertical"]),
