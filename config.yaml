@@ -21,6 +21,9 @@ retention_days: 3         # Drive folders older than this are deleted
 drive_root_folder: ClipBot
 
 posting:
+  # batch  = upload ALL new Shorts right after the 04:00 fetch (private) - you publish/schedule them in YouTube Studio
+  # spread = upload them one by one during the day (needs reliable hourly runs)
+  mode: batch
   # No posts during these local hours: [from, to). [2, 7] = nothing between 02:00 and 07:00.
   quiet_hours: [2, 7]
   # Posts start at start_hour and are spread evenly until the quiet hours begin
@@ -33,6 +36,9 @@ posting:
 
 youtube:
   privacy: private        # public | unlisted | private
+  # After YouTube's API audit: true = upload with a scheduled publish time and YouTube publishes the videos itself
+  # (Shorts spread 07:00-02:00 as in "posting", compilation at compilation.publish_hour). Before the audit: false.
+  schedule_publish: false
   category_id: "20"       # 20 = Gaming
   vertical: true          # convert 16:9 clips to 9:16 (blurred background) so they count as Shorts
   background_saturation: 1.2  # colour of the blurred background: 1.0 = unchanged, 1.2 = +20 %
@@ -78,8 +84,10 @@ creators:
 compilation:
   enabled: true
   hour: 4                  # built at 04:xx (after the Shorts fetch). Change compile.yml cron too.
-  upload_hour: 17          # uploaded at 17:00 ...
-  privacy: private         # ... as private, so you can check it and publish it yourself
+  upload: immediately      # immediately = upload right after rendering (~05:00) | at_upload_hour
+  upload_hour: 17          # only used with "upload: at_upload_hour"
+  publish_hour: 18         # with youtube.schedule_publish: YouTube publishes the compilation at this hour
+  privacy: private         # uploaded as private, so you can check it and publish it yourself
   first_episode: 1         # title ends with "| Klipy dne #N"; N counts up with every uploaded compilation
   min_minutes: 10          # preferred length 10-25 min: on a thin day the bar is lowered to reach 10 min ...
   max_minutes: 25

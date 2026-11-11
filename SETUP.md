@@ -6,10 +6,14 @@ ClipBot runs for free on **GitHub Actions**, so your computer doesn't need to be
   `config.yaml`. It converts them to vertical Shorts (blurred, +20 % saturated background, your logo on top) and
   saves them to Google Drive as `ClipBot/<Creator>/<date>/<Creator>-<date>-clip1.mp4`. Then it writes a title,
   description and hashtags for each clip and queues them. It also deletes Drive folders older than 3 days.
-* **Every 30 minutes (07:00–02:00):** it uploads the Shorts that are due, spread evenly between 07:00 and 02:00
-  (at least 30 min apart, so at most 38 a day). Nothing is posted between 02:00 and 07:00.
-* **Every night at ~04:37:** it builds a **5–20 minute horizontal compilation** of the day's best CZ/SK clips
-  (see "Daily compilation" below) and uploads it at **17:00 as private**, so you can check it and publish it at 18:00.
+* **Right after the fetch** (`posting.mode: batch`) it uploads **all** new Shorts to YouTube as private, so in the
+  morning they're waiting in YouTube Studio and you publish/schedule them yourself. (`mode: spread` = one by one
+  between 07:00 and 02:00 instead.) After YouTube's API audit, `youtube.schedule_publish: true` makes YouTube publish
+  them by itself at spread-out times.
+* **Every night at ~04:37:** it builds a **10–25 minute horizontal compilation** of the best CZ/SK clips of the last
+  24 h (see "Daily compilation" below) and uploads it **right away as private** ("… | Klipy dne #N"), so you can check
+  it and publish it at 18:00 (or, after the audit, YouTube publishes it at `compilation.publish_hour` by itself).
+* **Every hour (backup):** retries any upload that failed and finds live CZ/SK channels for the compilation.
 
 The one-time setup takes about 30–45 minutes. You'll collect **7 secret values** along the way. Paste them into a
 notes file as you go:
