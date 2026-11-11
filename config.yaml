@@ -92,9 +92,10 @@ compilation:
   name_tag: true           # streamer name in the bottom-left corner ...
   name_tag_seconds: 5      # ... for the first N seconds of each clip (0 = whole clip)
   crf: 23                  # video quality (lower = better/bigger). 23 = ~0.7 GB for 20 min
-  logo:                    # small logo in the top-right corner during the clips (remove "image" to turn off)
+  logo:                    # used in the TV-static transitions and on the thumbnail
     image: logo.png
-    width: 160
+    corner: false          # true = also a small logo in the top-right corner during the clips
+    width: 160             # (size/opacity of that corner logo)
     opacity: 0.9
   transition:              # short TV static between clips, with the logo in the middle
     enabled: true
