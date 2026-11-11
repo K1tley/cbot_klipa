@@ -52,6 +52,15 @@ def _video_size(path: Path) -> tuple[int, int]:
         return 1920, 1080
 
 
+def duration(path: Path) -> float:
+    p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
+                       capture_output=True, text=True)
+    try:
+        return float(json.loads(p.stdout)["format"]["duration"])
+    except (KeyError, ValueError):
+        return 0.0
+
+
 def _overlay_xy(position: str, ow: int, oh: int, clip_h: int, margin: int) -> tuple[int, int]:
     """Where to put an overlay of size ow x oh. 'top-band'/'bottom-band' centre it in the
     blurred area above/below the clip; corners are measured from the frame edge."""
