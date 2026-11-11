@@ -198,6 +198,7 @@ class Kick:
 
 
 DEFAULT_LENGTH = {"max_seconds": 60, "ideal_seconds": 30, "long_penalty": 0.5}
+LAST_STATS: list[dict] = []  # filled by collect(): per-streamer numbers for the daily report
 
 
 def length_factor(duration: float, rules: dict | None = None) -> float | None:
@@ -219,6 +220,7 @@ def collect(creators: list[dict], since: datetime, until: datetime, per_creator:
     """Return up to `per_creator` best clips for every creator: views weighted by length, nothing over the limit."""
     twitch = kick = None
     result: list[Clip] = []
+    LAST_STATS.clear()
     for cr in creators:
         platform = cr["platform"].lower()
         try:
@@ -231,14 +233,19 @@ def collect(creators: list[dict], since: datetime, until: datetime, per_creator:
             else:
                 log.error("Unknown platform %r for %s", platform, cr["name"])
                 continue
-        except Exception:  # one broken creator must not stop the rest
+        except Exception as e:  # one broken creator must not stop the rest
             log.exception("Could not get clips for %s", cr["name"])
+            LAST_STATS.append({"name": cr["name"], "platform": platform, "found": "ERROR", "too_long": "",
+                               "best_views": "", "chosen": str(e)[:80]})
             continue
         ok = [(c, length_factor(c.duration, length_rules)) for c in found]
         too_long = sum(1 for _, f in ok if f is None)
         ok = [(c, f) for c, f in ok if f is not None]
         ok.sort(key=lambda cf: cf[0].views * cf[1], reverse=True)
         top = [c for c, _ in ok[:per_creator]]
+        LAST_STATS.append({"name": cr["name"], "platform": platform, "found": len(found), "too_long": too_long,
+                           "best_views": max((c.views for c in found), default=0),
+                           "chosen": ", ".join(f"{c.views} views / {c.duration:.0f} s" for c in top) or "-"})
         log.info("%s (%s): %d clips in window (%d too long), keeping %d %s", cr["name"], platform, len(found),
                  too_long, len(top), [f"{c.views}v/{c.duration:.0f}s" for c in top])
         result.extend(top)

@@ -82,6 +82,15 @@ class Drive:
         body = {"name": name, "parents": [parent]}
         return self.svc.files().create(body=body, media_body=media, fields="id").execute()["id"]
 
+    def upload_sheet(self, csv_path: Path, name: str, parent: str) -> str:
+        """Upload a CSV and let Drive convert it into a Google Sheet (an older one with the same name is replaced)."""
+        old = self._find(name, parent, "application/vnd.google-apps.spreadsheet")
+        if old:
+            self.delete(old)
+        body = {"name": name, "parents": [parent], "mimeType": "application/vnd.google-apps.spreadsheet"}
+        media = MediaFileUpload(str(csv_path), mimetype="text/csv", resumable=False)
+        return self.svc.files().create(body=body, media_body=media, fields="id").execute()["id"]
+
     def download(self, file_id: str, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as fh:

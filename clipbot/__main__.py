@@ -209,6 +209,28 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
         log.info("  %s  %s", parse_iso(i["scheduled_at"]).astimezone(tz).strftime("%d.%m %H:%M"), i["file_name"])
     if batch_mode(cfg):
         cmd_post(cfg, everything=True)
+    report_fetch(cfg, drive, day_label, [i["key"] for i in new_items])
+
+
+def report_fetch(cfg: dict, drive, day_label: str, keys: list[str]) -> None:
+    from .report import Report
+    state = drive.read_json(QUEUE, empty_state())
+    by_key = {i["key"]: i for i in state["items"]}
+    r = Report(f"Shorts {day_label}")
+    r.table("Streamers (last 24 h)", ["Streamer", "Platform", "Clips in 24 h", "Over 60 s", "Best views", "Chosen"],
+            [[x["name"], x["platform"], x["found"], x["too_long"], x["best_views"], x["chosen"]]
+             for x in sources.LAST_STATS])
+    rows = []
+    for k in keys:
+        i = by_key.get(k)
+        if not i:
+            continue
+        yt = f"https://youtube.com/shorts/{i['youtube_id']}" if i.get("youtube_id") else ""
+        rows.append([i["file_name"], i["creator"], i.get("views", ""), i.get("source_title", ""), i["yt_title"],
+                     i["status"], yt, i.get("source_url", "")])
+    r.table("Chosen Shorts", ["File", "Streamer", "Views", "Original title", "YouTube title", "Status",
+                              "YouTube", "Original clip"], rows)
+    r.publish(drive, day_label, f"Shorts {day_label}")
 
 
 # ---------------------------------------------------------------- post
@@ -393,6 +415,31 @@ def cmd_compile(cfg: dict, force: bool) -> None:
     drive.write_json(QUEUE, state)
     if item and immediately:
         cmd_post(cfg, everything=True)
+    report_compile(cfg, drive, item)
+
+
+def report_compile(cfg: dict, drive, item: dict | None) -> None:
+    from . import compilation
+    from .report import Report
+    L = compilation.LAST
+    day = item["date"] if item else datetime.now(ZoneInfo(cfg["timezone"])).date().isoformat()
+    r = Report(f"Compilation {day}")
+    if item:
+        state = drive.read_json(QUEUE, empty_state())
+        cur = next((i for i in state["items"] if i.get("key") == item["key"]), item)
+        link = f"https://youtube.com/watch?v={cur['youtube_id']}" if cur.get("youtube_id") else "not uploaded yet"
+        streamers = len({o[2].lower() for o in L.get("order", [])})
+        r.text(f"**{cur['yt_title']}** - {len(L.get('order', []))} clips from {streamers} streamers - {link}")
+    if L.get("note"):
+        r.text(L["note"])
+    r.text(f"Scanned {L.get('scanned', '?')} channels, {L.get('candidates', '?')} candidate clips. "
+           "Score = clip views / that streamer's usual clip views, adjusted for clip length.")
+    r.table("Order in the video", ["#", "Starts at", "Streamer", "Score", "Views", "Length", "Clip title", "Clip"],
+            L.get("order", []))
+    chans = sorted(L.get("channels", []), key=lambda x: -x[5])
+    r.table("Channels with clips (last 24 h)", ["Channel", "Platform", "Clips", "Best views", "Usual views",
+                                                 "Best / usual", "Clips over min. views"], chans)
+    r.publish(drive, day, f"Compilation {day}")
 
 
 def cmd_cleanup(cfg: dict) -> None:

@@ -27,6 +27,7 @@ from . import captions, media, sources
 
 log = logging.getLogger(__name__)
 CHANNELS = "channels.json"
+LAST: dict = {}  # filled by build(): numbers for the daily report
 ROOT = Path(__file__).resolve().parent.parent
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -471,6 +472,8 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
             for c in tw_pool:
                 c["id"] = c.get("id") or ids.get(c["channel"])
 
+    LAST.clear()
+    LAST.update(channels=[], order=[], candidates=0, note="")
     min_views = int(comp.get("min_views", 30))
     length_rules = {**sources.DEFAULT_LENGTH, **(cfg.get("clip_length") or {})}
     per_channel = int(comp.get("clips_per_channel", 10))
@@ -500,6 +503,9 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         kept = sum(1 for x in clips if x.views >= min_views)
         log.info("  %-8s %-20s %3d clips in window, top views %5s, usual %6.0f, %d with >= %d views",
                  c["platform"], c["channel"][:20], found, views[0] if views else "-", base, kept, min_views)
+        if found:
+            LAST["channels"].append([c.get("name", c["channel"]), c["platform"], found, views[0] if views else 0,
+                                     round(base, 1), round((views[0] if views else 0) / max(base, 1), 1), kept])
         if views:  # remember today's median for this channel's future baseline
             ch = data["channels"].setdefault(c["key"], {k: v for k, v in c.items() if k != "key"})
             hist = [h for h in ch.get("history", []) if h[0] != day_label]
@@ -516,11 +522,14 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
                               duration=float(x.duration or length_rules.get("ideal_seconds", 30))))
     drive.write_json(CHANNELS, data)
     log.info("Compilation: %d candidate clips.", len(picks))
+    LAST["candidates"] = len(picks)
+    LAST["scanned"] = len(pool)
 
     chosen = select(picks, comp)
     hard_min = float(comp.get("absolute_min_minutes", float(comp["min_minutes"]) * 0.6)) * 60
     if not chosen or sum(p.duration for p in chosen) < hard_min:
         log.info("Not enough good clips today (%d) — no compilation.", len(chosen))
+        LAST["note"] = f"Not enough good clips today ({len(chosen)}, {sum(p.duration for p in chosen) / 60:.1f} min) - no video."
         return None
 
     # download; drop failures, then order
@@ -545,6 +554,11 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         log.info("Only %.1f min of clips downloaded — no compilation today.", total / 60)
         return None
     log.info("Compilation order (%d clips, %.1f min):", len(seq), total / 60)
+    t = 0.0
+    for i, p in enumerate(seq, 1):
+        LAST["order"].append([i, f"{int(t // 60)}:{int(t % 60):02d}", p.clip.creator, round(p.score, 1), p.clip.views,
+                              f"{p.duration:.0f} s", p.clip.title[:70], p.clip.url])
+        t += p.duration + float((comp.get("transition") or {}).get("seconds", 0.6))
     for i, p in enumerate(seq, 1):
         log.info("  %2d. %-14s score %.1f  %4d views  %4.0fs  %s", i, p.clip.creator, p.score, p.clip.views,
                  p.duration, p.clip.title[:60])
