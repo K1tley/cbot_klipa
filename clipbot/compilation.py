@@ -518,7 +518,8 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
     log.info("Compilation: %d candidate clips.", len(picks))
 
     chosen = select(picks, comp)
-    if not chosen or sum(p.duration for p in chosen) < float(comp["min_minutes"]) * 60 * 0.6:
+    hard_min = float(comp.get("absolute_min_minutes", float(comp["min_minutes"]) * 0.6)) * 60
+    if not chosen or sum(p.duration for p in chosen) < hard_min:
         log.info("Not enough good clips today (%d) — no compilation.", len(chosen))
         return None
 
@@ -540,7 +541,7 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
     ready = limit_dominance(ready)  # re-check the diversity rule after failed downloads
     seq = order(ready, random.Random(day_label))
     total = sum(p.duration for p in seq)
-    if total < float(comp["min_minutes"]) * 60 * 0.6:
+    if total < hard_min:
         log.info("Only %.1f min of clips downloaded — no compilation today.", total / 60)
         return None
     log.info("Compilation order (%d clips, %.1f min):", len(seq), total / 60)
