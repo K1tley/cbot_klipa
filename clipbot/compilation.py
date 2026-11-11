@@ -263,7 +263,7 @@ def render_segment(src: Path, dst: Path, name: str, comp: dict, tmp: Path, max_s
         last = "v1"
     logo_cfg = comp.get("logo") or {}
     logo = ROOT / logo_cfg["image"] if logo_cfg.get("image") else None
-    if logo and logo.exists():
+    if logo and logo.exists() and logo_cfg.get("corner", False):
         idx = len([a for a in inputs if a == "-i"])
         inputs += ["-i", str(logo)]
         w = int(logo_cfg.get("width", 160))
