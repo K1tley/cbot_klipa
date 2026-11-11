@@ -207,6 +207,8 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
     log.info("Fetch finished: %d new clips queued.", len(new_items))
     for i in new_items:
         log.info("  %s  %s", parse_iso(i["scheduled_at"]).astimezone(tz).strftime("%d.%m %H:%M"), i["file_name"])
+    if batch_mode(cfg):
+        cmd_post(cfg, everything=True)
 
 
 # ---------------------------------------------------------------- post
@@ -224,7 +226,29 @@ def recaption(cfg: dict, item: dict, channels: dict) -> None:
     log.info("Re-captioned %s -> \"%s\" (ai=%s)", item["file_name"], title, item["ai_caption"])
 
 
-def cmd_post(cfg: dict) -> None:
+def batch_mode(cfg: dict) -> bool:
+    return str(cfg["posting"].get("mode", "spread")).lower() == "batch"
+
+
+def publish_time(cfg: dict, item: dict, now: datetime) -> str | None:
+    """With youtube.schedule_publish: the time YouTube should publish this video by itself."""
+    if not cfg["youtube"].get("schedule_publish"):
+        return None
+    if item.get("kind") == "long":
+        tz = ZoneInfo(cfg["timezone"])
+        local = now.astimezone(tz)
+        t = local.replace(hour=int(cfg["compilation"].get("publish_hour", 18)), minute=0, second=0, microsecond=0)
+        if t <= local:
+            return None
+        return iso(t)
+    when = item.get("scheduled_at")
+    if when and parse_iso(when) > now + timedelta(minutes=15):
+        return iso(parse_iso(when))
+    return None
+
+
+def cmd_post(cfg: dict, everything: bool = False) -> None:
+    """Upload pending videos. everything=True: all of them now (batch mode), else only those that are due."""
     from googleapiclient.errors import HttpError
 
     from .google_apis import Drive, YouTube
@@ -232,16 +256,22 @@ def cmd_post(cfg: dict) -> None:
     drive = Drive(cfg["drive_root_folder"])
     state = drive.read_json(QUEUE, empty_state())
     now = datetime.now(timezone.utc)
-    due = sorted((i for i in state["items"] if i["status"] == "pending" and i["scheduled_at"]
-                  and parse_iso(i["scheduled_at"]) <= now), key=lambda i: i["scheduled_at"])
-    local_now = now.astimezone(ZoneInfo(cfg["timezone"]))
-    if in_quiet(local_now, cfg["posting"].get("quiet_hours")):
-        due = [i for i in due if i.get("kind") == "long"]  # Shorts wait until morning
-    longs = [i for i in due if i.get("kind") == "long"]
-    due = longs + [i for i in due if i.get("kind") != "long"][: int(cfg["posting"]["max_per_run"])]
+    pending = sorted((i for i in state["items"] if i["status"] == "pending"),
+                     key=lambda i: i.get("scheduled_at") or "")
+    if everything or batch_mode(cfg):
+        # batch: anything still waiting goes up now (also leftovers / retries of failed uploads)
+        due = pending
+    else:
+        due = [i for i in pending if i.get("scheduled_at") and parse_iso(i["scheduled_at"]) <= now]
+        local_now = now.astimezone(ZoneInfo(cfg["timezone"]))
+        if in_quiet(local_now, cfg["posting"].get("quiet_hours")):
+            due = [i for i in due if i.get("kind") == "long"]  # Shorts wait until morning
+        longs = [i for i in due if i.get("kind") == "long"]
+        due = longs + [i for i in due if i.get("kind") != "long"][: int(cfg["posting"]["max_per_run"])]
     if not due:
         log.info("Nothing due to post.")
         return
+    log.info("Uploading %d video(s)%s.", len(due), " (batch)" if everything or batch_mode(cfg) else "")
 
     yt = YouTube()
     y = cfg["youtube"]
@@ -261,10 +291,13 @@ def cmd_post(cfg: dict) -> None:
                 continue
             try:
                 drive.download(item["drive_file_id"], path)
+                pub = publish_time(cfg, item, now)
                 vid = yt.upload(path, item["yt_title"], item["yt_description"], item["yt_tags"],
-                                y["category_id"], y["privacy"])
-                item.update(status="posted", youtube_id=vid, posted_at=iso(datetime.now(timezone.utc)))
-                log.info("Posted %s -> https://youtube.com/shorts/%s", item["file_name"], vid)
+                                y["category_id"], y["privacy"], publish_at=pub)
+                item.update(status="posted", youtube_id=vid, posted_at=iso(datetime.now(timezone.utc)),
+                            publish_at=pub)
+                log.info("Uploaded %s -> https://youtube.com/shorts/%s%s", item["file_name"], vid,
+                         f" (YouTube publishes it at {pub})" if pub else "")
             except HttpError as e:
                 item["attempts"] += 1
                 if "quotaExceeded" in str(e) or "uploadLimitExceeded" in str(e):
@@ -291,8 +324,9 @@ def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
         # episode number is given only when the upload succeeds, so skipped days leave no gaps
         episode = int(state.get("episode", int(comp.get("first_episode", 1)) - 1)) + 1
         title = episode_title(item.get("base_title") or item["yt_title"], episode)
+        pub = publish_time(cfg, item, datetime.now(timezone.utc))
         vid = yt.upload(path, title, item["yt_description"], item["yt_tags"],
-                        cfg["youtube"]["category_id"], comp.get("privacy", "private"))
+                        cfg["youtube"]["category_id"], comp.get("privacy", "private"), publish_at=pub)
         state["episode"] = episode
         item.update(status="posted", youtube_id=vid, posted_at=iso(datetime.now(timezone.utc)),
                     yt_title=title, episode=episode)
@@ -347,15 +381,18 @@ def cmd_compile(cfg: dict, force: bool) -> None:
         item = compilation.build(cfg, drive, now, local, Path(tmp))
     state = drive.read_json(QUEUE, empty_state())  # re-read: other runs may have changed it
     state["last_compilation"] = local.date().isoformat()
+    immediately = str(comp.get("upload", "immediately")).lower() == "immediately"
     if item:
         up = local.replace(hour=int(comp["upload_hour"]), minute=0, second=0, microsecond=0)
-        if up < local:
+        if up < local or immediately:
             up = local
         item["scheduled_at"] = iso(up)
         state["items"] = [i for i in state["items"] if i.get("key") != item["key"]] + [item]
         log.info("Compilation queued for upload at %s (%s).", up.strftime("%d.%m %H:%M"),
                  comp.get("privacy", "private"))
     drive.write_json(QUEUE, state)
+    if item and immediately:
+        cmd_post(cfg, everything=True)
 
 
 def cmd_cleanup(cfg: dict) -> None:

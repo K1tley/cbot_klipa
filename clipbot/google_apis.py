@@ -127,11 +127,16 @@ class YouTube:
         self.svc = build("youtube", "v3", credentials=_creds("YOUTUBE_REFRESH_TOKEN", YOUTUBE_SCOPES), cache_discovery=False)
 
     def upload(self, path: Path, title: str, description: str, tags: list[str],
-               category_id: str, privacy: str) -> str:
+               category_id: str, privacy: str, publish_at: str | None = None) -> str:
+        """publish_at (RFC 3339, UTC): upload as private and let YouTube publish it at that time.
+        Only works once the Google project has passed YouTube's API audit."""
+        status = {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}
+        if publish_at:
+            status.update(privacyStatus="private", publishAt=publish_at)
         body = {
             "snippet": {"title": title, "description": description, "tags": tags,
                         "categoryId": category_id},
-            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
+            "status": status,
         }
         media = MediaFileUpload(str(path), mimetype="video/mp4", resumable=True, chunksize=8 * 1024 * 1024)
         req = self.svc.videos().insert(part="snippet,status", body=body, media_body=media)
