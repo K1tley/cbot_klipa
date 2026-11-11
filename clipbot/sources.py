@@ -142,31 +142,47 @@ class Kick:
         return r.json()
 
     def top_clips(self, creator: str, channel: str, since: datetime, until: datetime) -> list[Clip]:
-        urls = [
-            f"https://kick.com/api/v2/channels/{channel}/clips?sort=view&time=day",
-            f"https://kick.com/api/v2/channels/{channel}/clips?sort=date&time=day",
-        ]
-        raw: list[dict] = []
-        for url in urls:
+        """Kick's 'time=day' seems to mean the calendar day, not the last 24 h, so we collect from
+        several views (top of day, top of week, newest first - paged) and filter to our own window."""
+        base = f"https://kick.com/api/v2/channels/{channel}/clips"
+        raw: dict[str, dict] = {}
+        queries = [f"{base}?sort=view&time=day", f"{base}?sort=view&time=week"]
+        for url in queries:
+            try:
+                data = self._fetch(url)
+                for c in data.get("clips") or data.get("data") or []:
+                    raw[str(c.get("id"))] = c
+            except Exception as e:  # noqa: BLE001
+                log.warning("Kick request failed (%s): %s", url, e)
+        cursor = None
+        for _ in range(5):  # newest first, until we are past the start of our window
+            url = f"{base}?sort=date&time=all" + (f"&cursor={cursor}" if cursor else "")
             try:
                 data = self._fetch(url)
             except Exception as e:  # noqa: BLE001
                 log.warning("Kick request failed (%s): %s", url, e)
-                continue
-            raw = data.get("clips") or data.get("data") or (data if isinstance(data, list) else [])
-            if raw:
+                break
+            page = data.get("clips") or data.get("data") or []
+            for c in page:
+                raw[str(c.get("id"))] = c
+            cursor = data.get("nextCursor") or data.get("next_cursor")
+            oldest = min((_parse_time(c.get("created_at")) for c in page if c.get("created_at")), default=None)
+            if not cursor or not page or (oldest and oldest < since):
                 break
 
         clips: list[Clip] = []
-        for c in raw:
+        for c in raw.values():
             created = _parse_time(c.get("created_at") or c.get("started_at"))
             if created and not (since <= created <= until):
                 continue
             cid = str(c.get("id") or c.get("clip_id") or "")
-            if not cid:
+            if not cid or cid == "None":
                 continue
             cat = c.get("category") or {}
             media = [u for u in (c.get("video_url"), c.get("clip_url")) if u]
+            dur = float(c.get("duration") or 0)
+            if dur > 1000:  # some Kick responses give milliseconds
+                dur /= 1000
             clips.append(Clip(
                 platform="kick", clip_id=cid, creator=creator, channel=channel,
                 title=(c.get("title") or "").strip(),
@@ -174,9 +190,10 @@ class Kick:
                 views=int(c.get("view_count") or c.get("views") or 0),
                 created_at=c.get("created_at") or "",
                 game=cat.get("name", "") if isinstance(cat, dict) else "",
-                duration=float(c.get("duration") or 0),
+                duration=dur,
                 media_urls=media,
             ))
+        log.debug("Kick %s: %d clips seen, %d in window", channel, len(raw), len(clips))
         return clips
 
 

@@ -444,9 +444,10 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         try:
             if c["platform"] == "twitch":
                 if not c.get("id"):
+                    log.info("  twitch   %-20s not found on Twitch (check the channel name)", c["channel"][:20])
                     continue
                 clips = tw.top_clips(c.get("name", c["channel"]), c["channel"], since, until,
-                                     broadcaster_id=c["id"], limit=per_channel)
+                                     broadcaster_id=c["id"], limit=100)
             elif c["platform"] == "kick":
                 kick = kick or sources.Kick()
                 clips = kick.top_clips(c.get("name", c["channel"]), c["channel"], since, until)
@@ -456,9 +457,13 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
             log.warning("Clips for %s failed: %s", c["channel"], e)
             continue
         clips.sort(key=lambda x: -x.views)
+        found = len(clips)
         clips = clips[:per_channel]
         views = [x.views for x in clips]
         base = baseline(c, views, day_label)
+        kept = sum(1 for x in clips if x.views >= min_views)
+        log.info("  %-8s %-20s %3d clips in window, top views %5s, usual %6.0f, %d with >= %d views",
+                 c["platform"], c["channel"][:20], found, views[0] if views else "-", base, kept, min_views)
         if views:  # remember today's median for this channel's future baseline
             ch = data["channels"].setdefault(c["key"], {k: v for k, v in c.items() if k != "key"})
             hist = [h for h in ch.get("history", []) if h[0] != day_label]
