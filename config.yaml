@@ -29,6 +29,7 @@ youtube:
   privacy: private        # public | unlisted | private
   category_id: "20"       # 20 = Gaming
   vertical: true          # convert 16:9 clips to 9:16 (blurred background) so they count as Shorts
+  background_saturation: 1.2  # colour of the blurred background: 1.0 = unchanged, 1.2 = +20 %
   max_seconds: 179        # Shorts limit is 3 minutes
 
 # Logo / image placed on every video. Remove the "image" line (or the whole block) to turn it off.
