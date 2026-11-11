@@ -2,9 +2,8 @@ name: Hourly post (Google Drive -> YouTube)
 
 on:
   schedule:
-    # every 30 min (:17 and :47), except Prague quiet hours (02:00-07:00) to save GitHub minutes.
-    # UTC hours 0,5-23 cover 07:00-01:59 Prague in both winter and summer time.
-    - cron: "17,47 0,5-23 * * *"
+    # backup: retries failed uploads (and in "spread" mode posts the due Shorts) + finds live CZ/SK channels
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 concurrency:
