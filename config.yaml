@@ -10,6 +10,12 @@ timezone: Europe/Prague
 fetch_hour: 4
 
 clips_per_creator: 3      # take up to this many top clips per creator
+
+# Clip length rules (Shorts AND the compilation):
+clip_length:
+  max_seconds: 60         # hard limit: longer clips are never used
+  ideal_seconds: 30       # up to this length a clip's views count fully ...
+  long_penalty: 0.5       # ... a clip at max_seconds counts at 50 % (needs 2x the views of a 30 s clip)
 lookback_hours: 24        # "recent" = clips created in the last N hours
 retention_days: 3         # Drive folders older than this are deleted
 drive_root_folder: ClipBot
@@ -82,14 +88,20 @@ compilation:
   min_baseline: 3          # floor for a tiny channel's average, so 4 views isn't "4x normal"
   clips_per_channel: 10    # look at each channel's top N clips of the day
   max_clips_per_streamer: 4
-  max_clip_seconds: 60     # longer clips are cut at this length
+  max_average_seconds: 40  # average clip length in the video stays at or below this
   name_tag: true           # streamer name in the bottom-left corner ...
   name_tag_seconds: 5      # ... for the first N seconds of each clip (0 = whole clip)
   crf: 23                  # video quality (lower = better/bigger). 23 = ~0.7 GB for 20 min
-  logo:
+  logo:                    # small logo in the top-right corner during the clips (remove "image" to turn off)
     image: logo.png
     width: 160
     opacity: 0.9
+  transition:              # short TV static between clips, with the logo in the middle
+    enabled: true
+    seconds: 0.6
+    logo: true
+    logo_width: 460
+    volume: 0.12           # loudness of the static noise (0.0 - 1.0)
   discover:                # finds CZ/SK Twitch channels automatically from live streams
     languages: [cs, sk]
     every_hours: 2
