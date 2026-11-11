@@ -78,8 +78,8 @@ compilation:
   min_minutes: 5           # shorter than this (on a thin day) -> no video that day
   max_minutes: 20
   score_threshold: 2.0     # "popular" = at least 2x the views that streamer's clips normally get
-  min_views: 30            # ignore clips with fewer views than this, whatever the score
-  min_baseline: 10         # floor for a tiny channel's average, so 12 views isn't "5x normal"
+  min_views: 5             # ignore clips with fewer views than this, whatever the score
+  min_baseline: 3          # floor for a tiny channel's average, so 4 views isn't "4x normal"
   clips_per_channel: 10    # look at each channel's top N clips of the day
   max_clips_per_streamer: 4
   max_clip_seconds: 60     # longer clips are cut at this length
