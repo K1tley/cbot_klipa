@@ -81,8 +81,9 @@ compilation:
   upload_hour: 17          # uploaded at 17:00 ...
   privacy: private         # ... as private, so you can check it and publish it yourself
   first_episode: 1         # title ends with "| Klipy dne #N"; N counts up with every uploaded compilation
-  min_minutes: 5           # shorter than this (on a thin day) -> no video that day
-  max_minutes: 20
+  min_minutes: 10          # preferred length 10-25 min: on a thin day the bar is lowered to reach 10 min ...
+  max_minutes: 25
+  absolute_min_minutes: 5  # ... but if even then there's less than this, no video that day
   score_threshold: 2.0     # "popular" = at least 2x the views that streamer's clips normally get
   min_views: 5             # ignore clips with fewer views than this, whatever the score
   min_baseline: 3          # floor for a tiny channel's average, so 4 views isn't "4x normal"
