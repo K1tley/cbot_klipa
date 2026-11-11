@@ -31,6 +31,14 @@ youtube:
   vertical: true          # convert 16:9 clips to 9:16 (blurred background) so they count as Shorts
   max_seconds: 179        # Shorts limit is 3 minutes
 
+# Logo / image placed on every video. Remove the "image" line (or the whole block) to turn it off.
+overlay:
+  image: logo.png         # file in the main folder of the repo (PNG with transparent background)
+  position: top-band      # top-band / bottom-band = centred in the blurred area above / below the clip
+                          # or: top-left, top-right, bottom-left, bottom-right, center
+  width: 340              # size in pixels (the video is 1080 wide)
+  opacity: 1.0            # 0.0 - 1.0
+
 captions:
   language: Czech         # language of the YouTube title/description
   model: claude-sonnet-5-5 # Anthropic model used for captions + hashtags

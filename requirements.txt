@@ -7,3 +7,4 @@ google-auth-oauthlib>=1.2
 anthropic>=0.40
 curl_cffi>=0.7
 yt-dlp[default,curl-cffi]
+pillow
