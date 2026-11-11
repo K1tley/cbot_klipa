@@ -5,6 +5,8 @@ Usage:
     python -m clipbot post              # upload any clips that are due to YouTube
     python -m clipbot cleanup           # delete Drive folders older than retention_days
     python -m clipbot status            # print the queue
+    python -m clipbot discover [--force]  # remember CZ/SK channels that are live right now
+    python -m clipbot compile [--force]   # build the daily long compilation, queue it for upload_hour
 """
 from __future__ import annotations
 
@@ -102,7 +104,8 @@ def schedule_times(cfg: dict, state: dict, n: int, now: datetime, tz: ZoneInfo) 
             start = first.astimezone(timezone.utc)
     start = next_allowed(start, cfg, tz)
     min_gap = timedelta(minutes=int(p["min_interval_minutes"]))
-    pending = [parse_iso(i["scheduled_at"]) for i in state["items"] if i["status"] == "pending"]
+    pending = [parse_iso(i["scheduled_at"]) for i in state["items"]
+               if i["status"] == "pending" and i.get("kind") != "long" and i.get("scheduled_at")]
     if pending:
         start = next_allowed(max(start, max(pending) + min_gap), cfg, tz)
     # length of the posting window: from start until the next quiet period begins
@@ -225,11 +228,11 @@ def cmd_post(cfg: dict) -> None:
     now = datetime.now(timezone.utc)
     due = sorted((i for i in state["items"] if i["status"] == "pending" and i["scheduled_at"]
                   and parse_iso(i["scheduled_at"]) <= now), key=lambda i: i["scheduled_at"])
-    due = due[: int(cfg["posting"]["max_per_run"])]
     local_now = now.astimezone(ZoneInfo(cfg["timezone"]))
-    if due and in_quiet(local_now, cfg["posting"].get("quiet_hours")):
-        log.info("Quiet hours (%s) — %d clip(s) wait until morning.", local_now.strftime("%H:%M"), len(due))
-        return
+    if in_quiet(local_now, cfg["posting"].get("quiet_hours")):
+        due = [i for i in due if i.get("kind") == "long"]  # Shorts wait until morning
+    longs = [i for i in due if i.get("kind") == "long"]
+    due = longs + [i for i in due if i.get("kind") != "long"][: int(cfg["posting"]["max_per_run"])]
     if not due:
         log.info("Nothing due to post.")
         return
@@ -240,6 +243,9 @@ def cmd_post(cfg: dict) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         for item in due:
             path = Path(tmp) / item["file_name"]
+            if item.get("kind") == "long":
+                post_long(cfg, drive, yt, state, item, Path(tmp))
+                continue
             if not item.get("ai_caption"):
                 recaption(cfg, item, channels)
             if captions.is_unsafe(item["yt_title"]):
@@ -269,6 +275,83 @@ def cmd_post(cfg: dict) -> None:
                 drive.write_json(QUEUE, state)
 
 
+def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
+    from googleapiclient.errors import HttpError
+    comp = cfg["compilation"]
+    from .compilation import episode_title
+    path = tmp / item["file_name"]
+    try:
+        drive.download(item["drive_file_id"], path)
+        # episode number is given only when the upload succeeds, so skipped days leave no gaps
+        episode = int(state.get("episode", int(comp.get("first_episode", 1)) - 1)) + 1
+        title = episode_title(item.get("base_title") or item["yt_title"], episode)
+        vid = yt.upload(path, title, item["yt_description"], item["yt_tags"],
+                        cfg["youtube"]["category_id"], comp.get("privacy", "private"))
+        state["episode"] = episode
+        item.update(status="posted", youtube_id=vid, posted_at=iso(datetime.now(timezone.utc)),
+                    yt_title=title, episode=episode)
+        log.info("Posted compilation #%d \"%s\" -> https://youtube.com/watch?v=%s", episode, title, vid)
+        if item.get("thumb_drive_id"):
+            thumb = drive.download(item["thumb_drive_id"], tmp / "thumb.jpg")
+            try:
+                yt.set_thumbnail(vid, thumb)
+                log.info("Thumbnail set.")
+            except HttpError as e:
+                log.warning("Could not set the thumbnail (is the channel phone-verified?): %s", e)
+    except Exception:  # noqa: BLE001
+        item["attempts"] += 1
+        log.exception("Posting the compilation failed")
+        if item["attempts"] >= 3:
+            item["status"] = "failed"
+    finally:
+        path.unlink(missing_ok=True)
+        drive.write_json(QUEUE, state)
+
+
+def cmd_discover(cfg: dict, force: bool) -> None:
+    from . import compilation
+    from .google_apis import Drive
+    if not cfg.get("compilation", {}).get("enabled"):
+        return
+    compilation.discover(cfg, Drive(cfg["drive_root_folder"]), force)
+
+
+def cmd_compile(cfg: dict, force: bool) -> None:
+    from . import compilation
+    from .google_apis import Drive
+
+    comp = cfg.get("compilation", {})
+    if not comp.get("enabled"):
+        log.info("Compilation is turned off in config.yaml.")
+        return
+    tz = ZoneInfo(cfg["timezone"])
+    now = datetime.now(timezone.utc)
+    local = now.astimezone(tz)
+    if not force and local.hour != int(comp["hour"]):
+        log.info("It's %s, the compilation is built at %02d:xx — nothing to do.", local.strftime("%H:%M"),
+                 int(comp["hour"]))
+        return
+    drive = Drive(cfg["drive_root_folder"])
+    state = drive.read_json(QUEUE, empty_state())
+    if not force and state.get("last_compilation") == local.date().isoformat():
+        log.info("Today's compilation is already done — skipping.")
+        return
+    compilation.discover(cfg, drive, force=False)  # top up the channel list first
+    with tempfile.TemporaryDirectory() as tmp:
+        item = compilation.build(cfg, drive, now, local, Path(tmp))
+    state = drive.read_json(QUEUE, empty_state())  # re-read: other runs may have changed it
+    state["last_compilation"] = local.date().isoformat()
+    if item:
+        up = local.replace(hour=int(comp["upload_hour"]), minute=0, second=0, microsecond=0)
+        if up < local:
+            up = local
+        item["scheduled_at"] = iso(up)
+        state["items"] = [i for i in state["items"] if i.get("key") != item["key"]] + [item]
+        log.info("Compilation queued for upload at %s (%s).", up.strftime("%d.%m %H:%M"),
+                 comp.get("privacy", "private"))
+    drive.write_json(QUEUE, state)
+
+
 def cmd_cleanup(cfg: dict) -> None:
     from .google_apis import Drive
     drive = Drive(cfg["drive_root_folder"])
@@ -291,12 +374,14 @@ def cmd_status(cfg: dict) -> None:
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser(prog="clipbot")
-    ap.add_argument("command", choices=["fetch", "post", "cleanup", "status"])
+    ap.add_argument("command", choices=["fetch", "post", "cleanup", "status", "discover", "compile"])
     ap.add_argument("--force", action="store_true", help="fetch now, ignoring the clock and today's run")
     args = ap.parse_args(argv)
     cfg = load_config()
     {"fetch": lambda: cmd_fetch(cfg, args.force), "post": lambda: cmd_post(cfg),
-     "cleanup": lambda: cmd_cleanup(cfg), "status": lambda: cmd_status(cfg)}[args.command]()
+     "cleanup": lambda: cmd_cleanup(cfg), "status": lambda: cmd_status(cfg),
+     "discover": lambda: cmd_discover(cfg, args.force),
+     "compile": lambda: cmd_compile(cfg, args.force)}[args.command]()
 
 
 if __name__ == "__main__":

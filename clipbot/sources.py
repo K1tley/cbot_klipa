@@ -66,15 +66,42 @@ class Twitch:
             self._games[game_id] = data[0]["name"] if data else ""
         return self._games[game_id]
 
-    def top_clips(self, creator: str, channel: str, since: datetime, until: datetime) -> list[Clip]:
-        users = self._get("users", login=channel).get("data", [])
-        if not users:
-            log.warning("Twitch channel %s not found", channel)
-            return []
+    def user_ids(self, logins: list[str]) -> dict[str, str]:
+        """login -> broadcaster id, looked up 100 at a time."""
+        out: dict[str, str] = {}
+        for i in range(0, len(logins), 100):
+            r = requests.get(f"{self.API}/users", headers=self.headers,
+                             params=[("login", l) for l in logins[i:i + 100]], timeout=30)
+            r.raise_for_status()
+            out.update({u["login"].lower(): u["id"] for u in r.json().get("data", [])})
+        return out
+
+    def live_streams(self, language: str, max_pages: int = 10) -> list[dict]:
+        """Everyone streaming in `language` right now (Twitch language code, e.g. cs, sk)."""
+        streams, cursor = [], None
+        for _ in range(max_pages):
+            params = {"language": language, "first": 100}
+            if cursor:
+                params["after"] = cursor
+            page = self._get("streams", **params)
+            streams += page.get("data", [])
+            cursor = page.get("pagination", {}).get("cursor")
+            if not cursor:
+                break
+        return streams
+
+    def top_clips(self, creator: str, channel: str, since: datetime, until: datetime,
+                  broadcaster_id: str | None = None, limit: int = 500) -> list[Clip]:
+        if not broadcaster_id:
+            users = self._get("users", login=channel).get("data", [])
+            if not users:
+                log.warning("Twitch channel %s not found", channel)
+                return []
+            broadcaster_id = users[0]["id"]
         clips: list[Clip] = []
         cursor = None
         while True:
-            params = dict(broadcaster_id=users[0]["id"], first=100,
+            params = dict(broadcaster_id=broadcaster_id, first=min(100, limit),
                           started_at=since.strftime("%Y-%m-%dT%H:%M:%SZ"),
                           ended_at=until.strftime("%Y-%m-%dT%H:%M:%SZ"))
             if cursor:
@@ -91,7 +118,7 @@ class Twitch:
                     duration=float(c.get("duration") or 0),
                 ))
             cursor = page.get("pagination", {}).get("cursor")
-            if not cursor or len(clips) >= 500:
+            if not cursor or len(clips) >= limit:
                 break
         return clips
 

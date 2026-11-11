@@ -74,8 +74,8 @@ class Drive:
             if not token:
                 return out
 
-    def upload(self, path: Path, name: str, parent: str) -> str:
-        media = MediaFileUpload(str(path), mimetype="video/mp4", resumable=True)
+    def upload(self, path: Path, name: str, parent: str, mimetype: str = "video/mp4") -> str:
+        media = MediaFileUpload(str(path), mimetype=mimetype, resumable=True, chunksize=32 * 1024 * 1024)
         existing = self._find(name, parent)
         if existing:
             return self.svc.files().update(fileId=existing, media_body=media, fields="id").execute()["id"]
@@ -139,3 +139,8 @@ class YouTube:
         while resp is None:
             _, resp = req.next_chunk()
         return resp["id"]
+
+    def set_thumbnail(self, video_id: str, path: Path) -> None:
+        """Needs a phone-verified channel; failures are logged, not fatal."""
+        self.svc.thumbnails().set(videoId=video_id,
+                                  media_body=MediaFileUpload(str(path), mimetype="image/jpeg")).execute()
