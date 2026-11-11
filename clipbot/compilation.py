@@ -120,6 +120,7 @@ def select(picks: list[Pick], comp: dict) -> list[Pick]:
     min_s, max_s = float(comp["min_minutes"]) * 60, float(comp["max_minutes"]) * 60
     max_per = int(comp.get("max_clips_per_streamer", 4))
     thr = float(comp.get("score_threshold", 2.0))
+    max_avg = float(comp.get("max_average_seconds", 40))
     ranked = sorted(picks, key=lambda p: -p.score)
     chosen: list[Pick] = []
     per: dict[str, int] = {}
@@ -129,6 +130,9 @@ def select(picks: list[Pick], comp: dict) -> list[Pick]:
             if p in chosen or p.score < t or per.get(who(p), 0) >= max_per:
                 continue
             if total + p.duration > max_s:
+                continue
+            # keep the average clip short: a long clip only gets in if it's a real top highlight
+            if chosen and (total + p.duration) / (len(chosen) + 1) > max_avg and p.score < 1.5 * thr:
                 continue
             chosen.append(p)
             per[who(p)] = per.get(who(p), 0) + 1
@@ -278,6 +282,37 @@ def render_segment(src: Path, dst: Path, name: str, comp: dict, tmp: Path, max_s
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         log.warning("Segment render failed for %s: %s", src.name, p.stderr[-600:])
+        return False
+    return True
+
+
+def render_static(dst: Path, comp: dict) -> bool:
+    """Short TV-static transition with the logo in the centre, encoded exactly like the clip segments
+    so everything can be joined without re-encoding."""
+    t = comp.get("transition") or {}
+    secs = float(t.get("seconds", 0.6))
+    inputs = ["-f", "lavfi", "-i", f"color=c=0x808080:s=1920x1080:r=30:d={secs}",
+              "-f", "lavfi", "-i", f"anoisesrc=d={secs}:c=white:a=1:r=48000"]
+    # strong per-frame noise + grain flicker + faint scanlines = old TV static
+    graph = ("[0:v]noise=alls=100:allf=t+u,hue=s=0,eq=contrast=2.3:brightness=-0.02,"
+             "drawgrid=w=1920:h=4:t=1:c=black@0.25,setsar=1[st]")
+    last = "st"
+    logo_cfg = comp.get("logo") or {}
+    logo = ROOT / logo_cfg["image"] if logo_cfg.get("image") else None
+    if t.get("logo", True) and logo and logo.exists():
+        inputs += ["-loop", "1", "-t", f"{secs}", "-i", str(logo)]
+        w = int(t.get("logo_width", 460))
+        graph += f";[2:v]scale={w}:-1,format=rgba[lg];[{last}][lg]overlay=(W-w)/2:(H-h)/2:shortest=1[sl]"
+        last = "sl"
+    graph += f";[{last}]format=yuv420p[v]"
+    vol = float(t.get("volume", 0.12))
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", graph,
+           "-map", "[v]", "-map", "1:a", "-af", f"highpass=f=300,volume={vol},aresample=48000",
+           "-t", f"{secs}", "-c:v", "libx264", "-preset", "veryfast", "-crf", str(comp.get("crf", 23)),
+           "-g", "60", "-r", "30", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", str(dst)]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        log.warning("Static transition render failed: %s", p.stderr[-600:])
         return False
     return True
 
@@ -437,6 +472,7 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
                 c["id"] = c.get("id") or ids.get(c["channel"])
 
     min_views = int(comp.get("min_views", 30))
+    length_rules = {**sources.DEFAULT_LENGTH, **(cfg.get("clip_length") or {})}
     per_channel = int(comp.get("clips_per_channel", 10))
     picks: list[Pick] = []
     seen_clips: set[str] = set()
@@ -472,9 +508,12 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         for x in clips:
             if x.views < min_views or captions.is_unsafe(x.title or "") or x.clip_id in seen_clips:
                 continue
+            factor = sources.length_factor(x.duration, length_rules)
+            if factor is None:  # over the hard length limit
+                continue
             seen_clips.add(x.clip_id)
-            picks.append(Pick(clip=x, score=x.views / max(base, float(comp.get("min_baseline", 10))),
-                              duration=min(float(x.duration or 30), float(comp.get("max_clip_seconds", 60)))))
+            picks.append(Pick(clip=x, score=factor * x.views / max(base, float(comp.get("min_baseline", 10))),
+                              duration=float(x.duration or length_rules.get("ideal_seconds", 30))))
     drive.write_json(CHANNELS, data)
     log.info("Compilation: %d candidate clips.", len(picks))
 
@@ -489,7 +528,11 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         raw = tmp / f"raw_{re.sub(r'[^A-Za-z0-9_-]', '', p.clip.clip_id)[:60]}.mp4"
         if media.download(p.clip, raw):
             dur, _ = _probe(raw)
-            p.duration = min(dur or p.duration, float(comp.get("max_clip_seconds", 60)))
+            if dur and sources.length_factor(dur, length_rules) is None:
+                log.info("Skipping %s: %.0f s is over the length limit", p.clip.url, dur)
+                raw.unlink(missing_ok=True)
+                continue
+            p.duration = dur or p.duration
             p.path = raw
             ready.append(p)
         else:
@@ -517,8 +560,22 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         p.path.unlink(missing_ok=True)
     if not segments:
         return None
+    # short TV static with the logo between every two clips
+    if (comp.get("transition") or {}).get("enabled", True) and len(segments) > 1:
+        static = tmp / "static.mp4"
+        if render_static(static, comp):
+            joined = []
+            for i, seg in enumerate(segments):
+                if i:
+                    joined.append(static)
+                joined.append(seg)
+            segments_to_join = joined
+        else:
+            segments_to_join = segments
+    else:
+        segments_to_join = segments
     out = tmp / f"compilation-{day_label}.mp4"
-    concat(segments, out, tmp)
+    concat(segments_to_join, out, tmp)
 
     for s in segments:
         s.unlink(missing_ok=True)
