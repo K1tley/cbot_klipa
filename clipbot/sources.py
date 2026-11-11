@@ -197,8 +197,26 @@ class Kick:
         return clips
 
 
-def collect(creators: list[dict], since: datetime, until: datetime, per_creator: int) -> list[Clip]:
-    """Return up to `per_creator` most-viewed clips for every creator."""
+DEFAULT_LENGTH = {"max_seconds": 60, "ideal_seconds": 30, "long_penalty": 0.5}
+
+
+def length_factor(duration: float, rules: dict | None = None) -> float | None:
+    """How much a clip's views count, by length. None = too long (hard limit).
+    Up to ideal_seconds: 1.0. Then linearly down to long_penalty at max_seconds
+    (0.5 = a 60 s clip needs twice the views of a 30 s clip)."""
+    r = {**DEFAULT_LENGTH, **(rules or {})}
+    mx, ideal, pen = float(r["max_seconds"]), float(r["ideal_seconds"]), float(r["long_penalty"])
+    d = float(duration or 0) or ideal  # unknown length: assume ideal, checked again after download
+    if d > mx + 0.5:
+        return None
+    if d <= ideal:
+        return 1.0
+    return 1.0 - (1.0 - pen) * (d - ideal) / max(mx - ideal, 1.0)
+
+
+def collect(creators: list[dict], since: datetime, until: datetime, per_creator: int,
+            length_rules: dict | None = None) -> list[Clip]:
+    """Return up to `per_creator` best clips for every creator: views weighted by length, nothing over the limit."""
     twitch = kick = None
     result: list[Clip] = []
     for cr in creators:
@@ -216,8 +234,12 @@ def collect(creators: list[dict], since: datetime, until: datetime, per_creator:
         except Exception:  # one broken creator must not stop the rest
             log.exception("Could not get clips for %s", cr["name"])
             continue
-        found.sort(key=lambda c: c.views, reverse=True)
-        top = found[:per_creator]
-        log.info("%s (%s): %d clips in window, keeping %d", cr["name"], platform, len(found), len(top))
+        ok = [(c, length_factor(c.duration, length_rules)) for c in found]
+        too_long = sum(1 for _, f in ok if f is None)
+        ok = [(c, f) for c, f in ok if f is not None]
+        ok.sort(key=lambda cf: cf[0].views * cf[1], reverse=True)
+        top = [c for c, _ in ok[:per_creator]]
+        log.info("%s (%s): %d clips in window (%d too long), keeping %d %s", cr["name"], platform, len(found),
+                 too_long, len(top), [f"{c.views}v/{c.duration:.0f}s" for c in top])
         result.extend(top)
     return result
