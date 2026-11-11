@@ -166,7 +166,7 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
                     continue
                 try:
                     media.make_short(raw, final, bool(cfg["youtube"]["vertical"]),
-                                     int(cfg["youtube"]["max_seconds"]))
+                                     int(cfg["youtube"]["max_seconds"]), cfg.get("overlay"))
                 except RuntimeError:
                     log.exception("Conversion failed for %s", clip.url)
                     continue
