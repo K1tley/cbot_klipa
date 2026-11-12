@@ -77,6 +77,12 @@ creators:
   - name: Restt
     platform: kick
     channel: restt
+  - name: HaiseT
+    platform: twitch
+    channel: haiset
+  - name: Flygun
+    platform: twitch
+    channel: flygun
 
 # ------------------------------------------------------------
 #  Daily long compilation (horizontal YouTube video)
@@ -106,16 +112,28 @@ compilation:
     corner: false          # true = also a small logo in the top-right corner during the clips
     width: 160             # (size/opacity of that corner logo)
     opacity: 0.9
+  teaser:                  # start of the video: "V dnešním videu uvidíte" + quick cuts from the best clips
+    enabled: true
+    clips: 4
+    seconds: 2.5           # length of each cut
+    text: "V dnešním videu uvidíte"
+  fade_out_seconds: 1.5    # fade to black at the very end of the video (0 = off)
   transition:              # short TV static between clips, with the logo in the middle
     enabled: true
     seconds: 0.6
     logo: true
     logo_width: 460
     volume: 0.12           # loudness of the static noise (0.0 - 1.0)
+  popularity:              # prefer well-known streamers: score is multiplied by a channel-size weight
+    weight: 0.5            # 0 = ignore channel size, 1 = strongly prefer big channels
+    reference_viewers: 500 # a channel with this many live viewers gets weight 1.0
+    min_factor: 0.15       # smallest weight (tiny channels)
+    max_factor: 1.5        # biggest weight
+    favorite_viewers: 2000 # the Shorts creators above always count as at least this big
   discover:                # finds CZ/SK Twitch channels automatically from live streams
     languages: [cs, sk]
     every_hours: 2
-    min_viewers: 20        # only remember channels with at least this many live viewers
+    min_viewers: 100       # only use channels that had at least this many live viewers (Shorts creators always count)
     active_days: 14        # forget channels not seen live for this long
     max_channels: 150      # scan at most this many (biggest first)
   # Kick can't be searched by language - add Kick (or extra Twitch) channels here by hand.

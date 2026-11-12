@@ -24,6 +24,8 @@ class Clip:
     game: str = ""
     duration: float = 0.0
     media_urls: list[str] = field(default_factory=list)  # direct video URLs, if known
+    stream_id: str = ""        # the VOD / livestream the clip was cut from (to spot duplicate moments)
+    offset: float | None = None  # where in that stream the clip starts, in seconds (Twitch only)
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -116,6 +118,8 @@ class Twitch:
                     title=c.get("title", "").strip(), url=c["url"], views=int(c.get("view_count", 0)),
                     created_at=c.get("created_at", ""), game=self._game_name(c.get("game_id", "")),
                     duration=float(c.get("duration") or 0),
+                    stream_id=str(c.get("video_id") or ""),
+                    offset=float(c["vod_offset"]) if c.get("vod_offset") is not None else None,
                 ))
             cursor = page.get("pagination", {}).get("cursor")
             if not cursor or len(clips) >= limit:
@@ -192,6 +196,7 @@ class Kick:
                 game=cat.get("name", "") if isinstance(cat, dict) else "",
                 duration=dur,
                 media_urls=media,
+                stream_id=str(c.get("livestream_id") or ""),
             ))
         log.debug("Kick %s: %d clips seen, %d in window", channel, len(raw), len(clips))
         return clips
@@ -213,6 +218,29 @@ def length_factor(duration: float, rules: dict | None = None) -> float | None:
     if d <= ideal:
         return 1.0
     return 1.0 - (1.0 - pen) * (d - ideal) / max(mx - ideal, 1.0)
+
+
+def same_moment(a: Clip, b: Clip) -> bool:
+    """Two clips of the same streamer that show the same moment (clipped by different viewers)."""
+    if a.creator.strip().lower() != b.creator.strip().lower():
+        return False
+    if a.stream_id and a.stream_id == b.stream_id and a.offset is not None and b.offset is not None:
+        da, db = a.duration or 30, b.duration or 30
+        overlap = min(a.offset + da, b.offset + db) - max(a.offset, b.offset)
+        return overlap > 0.3 * min(da, db)  # they share at least 30 % of the shorter clip
+    ta, tb = _parse_time(a.created_at), _parse_time(b.created_at)
+    if ta and tb and (not a.stream_id or not b.stream_id or a.stream_id == b.stream_id):
+        return abs((ta - tb).total_seconds()) <= 90  # clipped within 90 s of each other
+    return False
+
+
+def drop_duplicates(clips: list[Clip], key=lambda c: c.views) -> tuple[list[Clip], int]:
+    """Keep the best clip of every moment (by `key`), drop the other clips of the same moment."""
+    kept: list[Clip] = []
+    for c in sorted(clips, key=key, reverse=True):
+        if not any(same_moment(c, k) for k in kept):
+            kept.append(c)
+    return kept, len(clips) - len(kept)
 
 
 def collect(creators: list[dict], since: datetime, until: datetime, per_creator: int,
@@ -238,6 +266,9 @@ def collect(creators: list[dict], since: datetime, until: datetime, per_creator:
             LAST_STATS.append({"name": cr["name"], "platform": platform, "found": "ERROR", "too_long": "",
                                "best_views": "", "chosen": str(e)[:80]})
             continue
+        found, dupes = drop_duplicates(found)
+        if dupes:
+            log.info("%s: %d clip(s) dropped as the same moment as a better clip", cr["name"], dupes)
         ok = [(c, length_factor(c.duration, length_rules)) for c in found]
         too_long = sum(1 for _, f in ok if f is None)
         ok = [(c, f) for c, f in ok if f is not None]

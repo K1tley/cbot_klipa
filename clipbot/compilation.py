@@ -85,7 +85,7 @@ def channel_pool(cfg: dict, data: dict, today) -> list[dict]:
             seen = datetime.fromisoformat(ch.get("last_seen", "2000-01-01")).date()
         except ValueError:
             continue
-        if (today - seen).days <= active_days:
+        if (today - seen).days <= active_days and int(ch.get("peak_viewers", 0)) >= int(disc.get("min_viewers", 20)):
             pool[key] = dict(ch, key=key)
     ranked = sorted(pool.values(), key=lambda c: -int(c.get("peak_viewers", 0)))
     ranked = ranked[: int(disc.get("max_channels", 150))]
@@ -94,8 +94,9 @@ def channel_pool(cfg: dict, data: dict, today) -> list[dict]:
     for c in list(cfg.get("creators", [])) + list(comp.get("extra_channels") or []):
         key = f"{c['platform'].lower()}:{c['channel'].lower()}"
         known = data["channels"].get(key, {})
-        pool.setdefault(key, dict(known, key=key, platform=c["platform"].lower(),
-                                  channel=c["channel"].lower(), name=c.get("name", c["channel"])))
+        entry = pool.setdefault(key, dict(known, key=key, platform=c["platform"].lower(),
+                                          channel=c["channel"].lower(), name=c.get("name", c["channel"])))
+        entry["favorite"] = True
     return list(pool.values())  # same streamer on Twitch and Kick: both scanned, clips deduped by id
 
 
@@ -107,6 +108,21 @@ class Pick:
     duration: float
     path: Path | None = None
     extra: dict = field(default_factory=dict)
+
+
+def size_factor(ch: dict, comp: dict) -> float:
+    """Bigger / well-known streamers count more, so a tiny channel's '10x its usual 2 views' clip
+    doesn't beat a real moment from a known personality. 1.0 = a channel with reference_viewers."""
+    pop = comp.get("popularity") or {}
+    weight = float(pop.get("weight", 0.5))
+    if weight <= 0:
+        return 1.0
+    size = float(ch.get("peak_viewers") or 0)
+    if ch.get("favorite"):
+        size = max(size, float(pop.get("favorite_viewers", 2000)))
+    ref = float(pop.get("reference_viewers", 500))
+    f = (max(size, 1.0) / ref) ** weight
+    return min(max(f, float(pop.get("min_factor", 0.15))), float(pop.get("max_factor", 1.5)))
 
 
 def baseline(ch: dict, today_views: list[int], day_label: str) -> float:
@@ -244,8 +260,10 @@ def _probe(path: Path) -> tuple[float, bool]:
         return 0.0, False
 
 
-def render_segment(src: Path, dst: Path, name: str, comp: dict, tmp: Path, max_seconds: float) -> bool:
-    """Normalise one clip to 1920x1080 / 30 fps / 48 kHz stereo with a name tag and logo."""
+def render_segment(src: Path, dst: Path, name: str, comp: dict, tmp: Path, max_seconds: float,
+                   fade_out: float = 0.0) -> bool:
+    """Normalise one clip to 1920x1080 / 30 fps / 48 kHz stereo with a name tag and logo.
+    fade_out > 0: fade picture and sound to black/silence over the last N seconds (end of the video)."""
     _, has_audio = _probe(src)
     inputs = ["-i", str(src)]
     if not has_audio:
@@ -272,11 +290,17 @@ def render_segment(src: Path, dst: Path, name: str, comp: dict, tmp: Path, max_s
         graph += (f";[{idx}:v]scale={w}:-1,format=rgba,colorchannelmixer=aa={op}[lg]"
                   f";[{last}][lg]overlay=W-w-36:30[v2]")
         last = "v2"
+    clip_len = min(max_seconds, _probe(src)[0] or max_seconds)
+    fade_at = max(clip_len - fade_out, 0)
+    if fade_out > 0:
+        graph += f";[{last}]fade=t=out:st={fade_at:.2f}:d={fade_out:.2f}[fo]"
+        last = "fo"
     graph += f";[{last}]format=yuv420p[v]"
     audio_map = "0:a" if has_audio else "1:a"
     cmd = ["ffmpeg", "-y", "-loglevel", "error", *inputs, "-t", f"{max_seconds:.2f}",
            "-filter_complex", graph, "-map", "[v]", "-map", audio_map,
-           "-af", "aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11",
+           "-af", "aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11"
+           + (f",afade=t=out:st={fade_at:.2f}:d={fade_out:.2f}" if fade_out > 0 else ""),
            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(comp.get("crf", 23)),
            "-g", "60", "-r", "30", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
            "-shortest", str(dst)]
@@ -316,6 +340,51 @@ def render_static(dst: Path, comp: dict) -> bool:
         log.warning("Static transition render failed: %s", p.stderr[-600:])
         return False
     return True
+
+
+def render_teaser_part(seg: Path, dst: Path, start: float, secs: float, text: str, comp: dict, tmp: Path) -> bool:
+    """A short cut from an already-rendered segment with a 'V dnešním videu uvidíte' banner,
+    encoded like everything else so it can be joined without re-encoding the whole video."""
+    font = _font()
+    graph = "[0:v]setsar=1"
+    if font and text:
+        txt = tmp / "teaser_text.txt"
+        txt.write_text(text.upper(), encoding="utf-8")
+        graph += (f",drawtext=fontfile={font}:textfile={txt}:fontsize=64:fontcolor=white:box=1"
+                  f":boxcolor=black@0.6:boxborderw=24:x=(w-tw)/2:y=70")
+    graph += ",format=yuv420p[v]"
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start:.2f}", "-i", str(seg), "-t", f"{secs:.2f}",
+           "-filter_complex", graph, "-map", "[v]", "-map", "0:a",
+           "-af", f"afade=t=in:d=0.15,afade=t=out:st={max(secs - 0.25, 0):.2f}:d=0.25",
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", str(comp.get("crf", 23)),
+           "-g", "60", "-r", "30", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", str(dst)]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        log.warning("Teaser part failed: %s", p.stderr[-400:])
+        return False
+    return True
+
+
+def build_teaser(seq: list[Pick], seg_of: dict, comp: dict, tmp: Path, rng: random.Random) -> list[Path]:
+    """'V dnešním videu uvidíte': quick cuts from the strongest clips (not the opening one, so it isn't
+    shown twice in a row), each from the middle of the clip so the punchline isn't spoiled."""
+    t = comp.get("teaser") or {}
+    if not t.get("enabled", True) or len(seq) < 3:
+        return []
+    n, secs = int(t.get("clips", 4)), float(t.get("seconds", 2.5))
+    pool = [p for p in sorted(seq[1:], key=lambda p: -p.score) if id(p) in seg_of][: n]
+    rng.shuffle(pool)
+    parts = []
+    tag = float(comp.get("name_tag_seconds", 5))
+    for k, p in enumerate(pool):
+        dur = p.duration
+        if dur < secs + 0.5:
+            continue
+        start = min(max(tag + 0.3, dur * 0.35), dur - secs - 0.2) if dur > tag + secs + 1 else max(dur * 0.3, 0)
+        part = tmp / f"teaser_{k}.mp4"
+        if render_teaser_part(seg_of[id(p)], part, start, secs, t.get("text", "V dnešním videu uvidíte"), comp, tmp):
+            parts.append(part)
+    return parts
 
 
 def concat(segments: list[Path], out: Path, tmp: Path) -> None:
@@ -500,12 +569,14 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         clips = clips[:per_channel]
         views = [x.views for x in clips]
         base = baseline(c, views, day_label)
+        sf = size_factor(c, comp)
         kept = sum(1 for x in clips if x.views >= min_views)
-        log.info("  %-8s %-20s %3d clips in window, top views %5s, usual %6.0f, %d with >= %d views",
-                 c["platform"], c["channel"][:20], found, views[0] if views else "-", base, kept, min_views)
+        log.info("  %-8s %-20s %3d clips in window, top views %5s, usual %6.0f, size x%.2f, %d with >= %d views",
+                 c["platform"], c["channel"][:20], found, views[0] if views else "-", base, sf, kept, min_views)
         if found:
             LAST["channels"].append([c.get("name", c["channel"]), c["platform"], found, views[0] if views else 0,
-                                     round(base, 1), round((views[0] if views else 0) / max(base, 1), 1), kept])
+                                     round(base, 1), round((views[0] if views else 0) / max(base, 1), 1), kept,
+                                     int(c.get("peak_viewers") or 0), round(sf, 2)])
         if views:  # remember today's median for this channel's future baseline
             ch = data["channels"].setdefault(c["key"], {k: v for k, v in c.items() if k != "key"})
             hist = [h for h in ch.get("history", []) if h[0] != day_label]
@@ -518,9 +589,15 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
             if factor is None:  # over the hard length limit
                 continue
             seen_clips.add(x.clip_id)
-            picks.append(Pick(clip=x, score=factor * x.views / max(base, float(comp.get("min_baseline", 10))),
+            picks.append(Pick(clip=x, score=sf * factor * x.views / max(base, float(comp.get("min_baseline", 10))),
                               duration=float(x.duration or length_rules.get("ideal_seconds", 30))))
     drive.write_json(CHANNELS, data)
+    # the same moment clipped by several viewers -> keep only the best-scoring one
+    by_clip = {id(p.clip): p for p in picks}
+    kept, dupes = sources.drop_duplicates([p.clip for p in picks], key=lambda c: by_clip[id(c)].score)
+    picks = [by_clip[id(c)] for c in kept]
+    if dupes:
+        log.info("Compilation: %d duplicate clip(s) of the same moment dropped.", dupes)
     log.info("Compilation: %d candidate clips.", len(picks))
     LAST["candidates"] = len(picks)
     LAST["scanned"] = len(pool)
@@ -554,7 +631,9 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         log.info("Only %.1f min of clips downloaded — no compilation today.", total / 60)
         return None
     log.info("Compilation order (%d clips, %.1f min):", len(seq), total / 60)
-    t = 0.0
+    tcfg = comp.get("teaser") or {}
+    t = (float(tcfg.get("clips", 4)) * float(tcfg.get("seconds", 2.5))
+         + float((comp.get("transition") or {}).get("seconds", 0.6))) if tcfg.get("enabled", True) and len(seq) >= 3 else 0.0
     for i, p in enumerate(seq, 1):
         LAST["order"].append([i, f"{int(t // 60)}:{int(t % 60):02d}", p.clip.creator, round(p.score, 1), p.clip.views,
                               f"{p.duration:.0f} s", p.clip.title[:70], p.clip.url])
@@ -568,13 +647,20 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
     thumb = thumbnail(seq[0].path, tmp / f"thumbnail-{day_label}.jpg", meta["thumbnail_text"], comp, tmp)
 
     segments = []
+    seg_of: dict = {}
+    fade = float(comp.get("fade_out_seconds", 1.5))
     for i, p in enumerate(seq):
         seg = tmp / f"seg_{i:03d}.mp4"
-        if render_segment(p.path, seg, p.clip.creator, comp, tmp, p.duration):
+        last_clip = i == len(seq) - 1
+        if render_segment(p.path, seg, p.clip.creator, comp, tmp, p.duration, fade if last_clip else 0.0):
             segments.append(seg)
+            seg_of[id(p)] = seg
         p.path.unlink(missing_ok=True)
     if not segments:
         return None
+    teaser = build_teaser(seq, seg_of, comp, tmp, random.Random(day_label + "teaser"))
+    if teaser:
+        log.info("Teaser: %d quick cuts at the start.", len(teaser))
     # short TV static with the logo between every two clips
     if (comp.get("transition") or {}).get("enabled", True) and len(segments) > 1:
         static = tmp / "static.mp4"
@@ -584,11 +670,11 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
                 if i:
                     joined.append(static)
                 joined.append(seg)
-            segments_to_join = joined
+            segments_to_join = (teaser + [static] if teaser else []) + joined
         else:
-            segments_to_join = segments
+            segments_to_join = teaser + segments
     else:
-        segments_to_join = segments
+        segments_to_join = teaser + segments
     out = tmp / f"compilation-{day_label}.mp4"
     concat(segments_to_join, out, tmp)
 

@@ -439,7 +439,8 @@ def report_compile(cfg: dict, drive, item: dict | None) -> None:
             L.get("order", []))
     chans = sorted(L.get("channels", []), key=lambda x: -x[5])
     r.table("Channels with clips (last 24 h)", ["Channel", "Platform", "Clips", "Best views", "Usual views",
-                                                 "Best / usual", "Clips over min. views"], chans)
+                                                 "Best / usual", "Clips over min. views", "Peak live viewers",
+                                                 "Size weight"], chans)
     r.publish(drive, day, f"Compilation {day}")
 
 
