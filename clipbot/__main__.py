@@ -133,8 +133,9 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
     tz = ZoneInfo(cfg["timezone"])
     now = datetime.now(timezone.utc)
     local = now.astimezone(tz)
-    if not force and local.hour != int(cfg["fetch_hour"]):
-        log.info("It's %s in %s, fetch runs at %02d:00 — nothing to do.",
+    # GitHub often starts scheduled runs hours late, so: run at fetch_hour OR LATER, once per day
+    if not force and local.hour < int(cfg["fetch_hour"]):
+        log.info("It's %s in %s, today's fetch starts at %02d:00 — nothing to do yet.",
                  local.strftime("%H:%M"), cfg["timezone"], int(cfg["fetch_hour"]))
         return
 
@@ -389,8 +390,8 @@ def cmd_compile(cfg: dict, force: bool) -> None:
     tz = ZoneInfo(cfg["timezone"])
     now = datetime.now(timezone.utc)
     local = now.astimezone(tz)
-    if not force and local.hour != int(comp["hour"]):
-        log.info("It's %s, the compilation is built at %02d:xx — nothing to do.", local.strftime("%H:%M"),
+    if not force and local.hour < int(comp["hour"]):
+        log.info("It's %s, today's compilation starts at %02d:00 — nothing to do yet.", local.strftime("%H:%M"),
                  int(comp["hour"]))
         return
     drive = Drive(cfg["drive_root_folder"])
