@@ -2,12 +2,15 @@ name: Daily fetch (clips -> Google Drive)
 
 on:
   schedule:
-    # GitHub cron is in UTC. 04:00 in Prague is 03:00 UTC in winter and
-    # 02:00 UTC in summer, so both run and the script only works at the
-    # local hour set in config.yaml (fetch_hour). If you change fetch_hour,
-    # change these two hours too: (fetch_hour - 1) and (fetch_hour - 2), in UTC.
+    # GitHub cron is UTC and GitHub often starts scheduled runs late (sometimes hours), so there are
+    # several tries. The first one that runs at/after fetch_hour (config.yaml) does the work; the others
+    # see that today's fetch is done and stop within seconds.
+    # 02:07 / 03:07 UTC = 04:07 Prague in summer / winter, then backups at about 06, 09 and 12 Prague time.
     - cron: "7 2 * * *"
     - cron: "7 3 * * *"
+    - cron: "7 5 * * *"
+    - cron: "7 8 * * *"
+    - cron: "7 11 * * *"
   workflow_dispatch:
     inputs:
       force:

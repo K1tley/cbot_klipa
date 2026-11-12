@@ -2,10 +2,12 @@ name: Daily compilation (long video)
 
 on:
   schedule:
-    # 04:37 in Prague = 03:37 UTC in winter, 02:37 UTC in summer. The script only works at
-    # compilation.hour from config.yaml, so both lines are needed.
+    # Same idea as fetch.yml: several tries, the first one at/after compilation.hour does the work.
     - cron: "37 2 * * *"
     - cron: "37 3 * * *"
+    - cron: "37 5 * * *"
+    - cron: "37 8 * * *"
+    - cron: "37 11 * * *"
   workflow_dispatch:
     inputs:
       force:
