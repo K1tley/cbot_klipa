@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import captions, media, sources
+from . import captions, insights, media, sources
 
 log = logging.getLogger(__name__)
 CHANNELS = "channels.json"
@@ -396,45 +396,170 @@ def concat(segments: list[Path], out: Path, tmp: Path) -> None:
         raise RuntimeError(f"Joining the clips failed: {p.stderr[-600:]}")
 
 
-def thumbnail(segment: Path, out: Path, text: str, comp: dict, tmp: Path) -> Path | None:
-    """Frame from the middle of the opening highlight + big text + logo, 1280x720 JPEG."""
-    from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+FRAME_PROMPT = """These are {n} numbered frames from one Twitch/Kick clip. Which ONE would make the most eye-catching
+YouTube thumbnail? Prefer: a clearly visible face with a strong emotion (shock, laughing, shouting), or an
+obvious moment of action. Avoid: blurry frames, loading/black screens, menus, frames where nothing happens.
+Reply with JSON only: {{"best": <number>}}"""
 
-    dur, _ = _probe(segment)
-    frame = tmp / "thumb_frame.png"
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{max(dur * 0.5, 0):.2f}", "-i", str(segment),
-                    "-frames:v", "1", str(frame)], capture_output=True)
-    if not frame.exists():
+
+def _extract_frames(clip: Path, tmp: Path, tag: str, n: int = 6) -> list[Path]:
+    dur, _ = _probe(clip)
+    frames = []
+    for i in range(n):
+        t = dur * (0.15 + 0.7 * i / max(n - 1, 1)) if dur else i
+        f = tmp / f"cand_{tag}_{i}.jpg"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", str(clip),
+                        "-frames:v", "1", "-q:v", "3", str(f)], capture_output=True)
+        if f.exists():
+            frames.append(f)
+    return frames
+
+
+def best_frame(clip: Path, tmp: Path, tag: str, cfg: dict):
+    """Pick the best thumbnail frame of a clip. With an Anthropic key, Claude looks at a contact sheet of
+    6 candidates and chooses; otherwise the frame from the middle of the clip is used."""
+    from PIL import Image, ImageDraw, ImageFont
+    frames = _extract_frames(clip, tmp, tag)
+    if not frames:
         return None
-    im = Image.open(frame).convert("RGB").resize((1280, 720))
-    im = ImageEnhance.Color(im).enhance(1.25)
-    im = ImageEnhance.Contrast(im).enhance(1.1)
-    # dark gradient at the bottom so the text reads well
-    grad = Image.new("L", (1, 720))
-    for y in range(720):
-        grad.putpixel((0, y), int(max(0, (y - 330) / 390) * 200))
-    im = Image.composite(Image.new("RGB", im.size, (0, 0, 0)), im, grad.resize(im.size))
-    draw = ImageDraw.Draw(im)
+    pick = len(frames) // 2
+    use_ai = (cfg["compilation"].get("thumbnail") or {}).get("ai_frame_pick", True)
+    if use_ai and os.environ.get("ANTHROPIC_API_KEY") and len(frames) > 1:
+        try:
+            import anthropic
+            import base64
+            cols, w, h = 3, 426, 240
+            sheet = Image.new("RGB", (cols * w, ((len(frames) + cols - 1) // cols) * h), "black")
+            d = ImageDraw.Draw(sheet)
+            font = ImageFont.truetype(_font(), 34) if _font() else ImageFont.load_default()
+            for i, f in enumerate(frames):
+                im = Image.open(f).convert("RGB").resize((w, h))
+                sheet.paste(im, ((i % cols) * w, (i // cols) * h))
+                d.text(((i % cols) * w + 10, (i // cols) * h + 6), str(i + 1), font=font, fill="yellow",
+                       stroke_width=4, stroke_fill="black")
+            sheet_path = tmp / f"sheet_{tag}.jpg"
+            sheet.save(sheet_path, "JPEG", quality=80)
+            data = base64.b64encode(sheet_path.read_bytes()).decode()
+            msg = anthropic.Anthropic().messages.create(
+                model=cfg["captions"]["model"], max_tokens=200,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}},
+                    {"type": "text", "text": FRAME_PROMPT.format(n=len(frames))}]}])
+            text = "".join(getattr(b, "text", "") or "" for b in msg.content if getattr(b, "type", "") == "text")
+            n = int(json.loads(text[text.find("{"): text.rfind("}") + 1])["best"])
+            if 1 <= n <= len(frames):
+                pick = n - 1
+                log.info("Thumbnail frame for %s: AI picked %d/%d", tag, n, len(frames))
+        except Exception as e:  # noqa: BLE001
+            log.warning("AI frame pick failed (%s) — using the middle frame", str(e)[:150])
+    return Image.open(frames[pick]).convert("RGB")
+
+
+def _cover(im, w: int, h: int):
+    """Resize + centre-crop to exactly w x h."""
+    from PIL import Image
+    s = max(w / im.width, h / im.height)
+    im = im.resize((max(1, round(im.width * s)), max(1, round(im.height * s))), Image.LANCZOS)
+    x, y = (im.width - w) // 2, (im.height - h) // 2
+    return im.crop((x, y, x + w, y + h))
+
+
+def _fit_font(draw, text: str, max_w: int, start: int, stroke: int):
+    from PIL import ImageFont
     font_path = _font()
-    text = text.upper().strip()[:28]
-    size = 120
-    while size > 50:
+    size = start
+    while True:
         font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
-        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=8)
-        if bbox[2] - bbox[0] <= 1180:
-            break
+        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke)
+        if bbox[2] - bbox[0] <= max_w or size <= 40:
+            return font, bbox
         size -= 6
+
+
+def thumbnail(picks: list, out: Path, text: str, cfg: dict, tmp: Path) -> Path | None:
+    """1280x720 collage of the strongest clips (one per streamer, slanted panels), big text,
+    streamer names and the logo. The episode badge is added at upload time (add_episode_badge)."""
+    from PIL import Image, ImageDraw, ImageEnhance
+    comp = cfg["compilation"]
+    tcfg = comp.get("thumbnail") or {}
+    W, H = 1280, 720
+    chosen, seen = [], set()
+    for p in sorted(picks, key=lambda p: -p.score):
+        if p.path and who(p) not in seen:
+            chosen.append(p)
+            seen.add(who(p))
+        if len(chosen) >= int(tcfg.get("panels", 3)):
+            break
+    frames = [(p, best_frame(p.path, tmp, f"t{i}", cfg)) for i, p in enumerate(chosen)]
+    frames = [(p, f) for p, f in frames if f is not None]
+    if not frames:
+        return None
+    n, slant = len(frames), 70
+    canvas = Image.new("RGB", (W, H), "black")
+    bounds = [round(W * k / n) for k in range(n + 1)]
+    for k, (p, im) in enumerate(frames):
+        x0, x1 = bounds[k], bounds[k + 1]
+        panel_w = x1 - x0 + 2 * slant
+        tile = _cover(im, panel_w, H)
+        layer = Image.new("RGB", (W, H))
+        layer.paste(tile, (x0 - slant, 0))
+        mask = Image.new("L", (W, H), 0)
+        top0 = x0 + (slant if k else 0)
+        bot0 = x0 - (slant if k else 0)
+        top1 = x1 + (slant if k < n - 1 else 0)
+        bot1 = x1 - (slant if k < n - 1 else 0)
+        ImageDraw.Draw(mask).polygon([(top0, 0), (top1, 0), (bot1, H), (bot0, H)], fill=255)
+        canvas.paste(layer, (0, 0), mask)
+    d = ImageDraw.Draw(canvas)
+    for k in range(1, n):  # white slanted dividers
+        d.line([(bounds[k] + slant, 0), (bounds[k] - slant, H)], fill="white", width=10)
+    canvas = ImageEnhance.Color(canvas).enhance(float(tcfg.get("saturation", 1.35)))
+    canvas = ImageEnhance.Contrast(canvas).enhance(float(tcfg.get("contrast", 1.15)))
+    # dark gradient at the bottom for the text
+    grad = Image.linear_gradient("L").resize((W, H))
+    grad = grad.point(lambda v: max(0, int((v - 110) * 1.45)) if v > 110 else 0)
+    canvas = Image.composite(Image.new("RGB", (W, H), "black"), canvas, grad)
+    d = ImageDraw.Draw(canvas)
+    names_h = 0
+    if tcfg.get("names", True):
+        names = "  •  ".join(p.clip.creator for p, _ in frames)
+        font, bbox = _fit_font(d, names, W - 120, 44, 5)
+        names_h = bbox[3] - bbox[1] + 18
+        d.text(((W - (bbox[2] - bbox[0])) // 2, H - names_h - 22), names, font=font, fill="white",
+               stroke_width=5, stroke_fill="black")
+    big = text.upper().strip()[:28]
+    font, bbox = _fit_font(d, big, W - 100, int(tcfg.get("text_size", 132)), 11)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    draw.text(((1280 - tw) // 2, 720 - th - 70), text, font=font, fill=(255, 230, 0),
-              stroke_width=8, stroke_fill=(0, 0, 0))
+    d.text(((W - tw) // 2, H - names_h - th - 60), big, font=font, fill=tuple(tcfg.get("text_color", [255, 222, 0])),
+           stroke_width=11, stroke_fill="black")
     logo_cfg = comp.get("logo") or {}
     logo = ROOT / logo_cfg["image"] if logo_cfg.get("image") else None
     if logo and logo.exists():
         lg = Image.open(logo).convert("RGBA")
-        lg.thumbnail((200, 200))
-        im.paste(lg, (1280 - lg.width - 30, 24), lg)
-    im.save(out, "JPEG", quality=90)
+        size = int(tcfg.get("logo_size", 230))
+        lg.thumbnail((size, size))
+        canvas.paste(lg, (W - lg.width - 26, 20), lg)
+    canvas.save(out, "JPEG", quality=92)
     return out
+
+
+def add_episode_badge(path: Path, episode: int, cfg: dict) -> Path:
+    """Draw '#N' in the top-left corner (done at upload time, when the episode number is known)."""
+    from PIL import Image, ImageDraw
+    tcfg = cfg["compilation"].get("thumbnail") or {}
+    if not tcfg.get("episode_badge", True):
+        return path
+    im = Image.open(path).convert("RGB")
+    d = ImageDraw.Draw(im)
+    label = f"#{episode}"
+    font, bbox = _fit_font(d, label, 400, 96, 0)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    pad = 22
+    d.rounded_rectangle([24, 22, 24 + tw + 2 * pad, 22 + th + 2 * pad + 6], radius=22,
+                        fill=tuple(tcfg.get("badge_color", [229, 37, 33])), outline="white", width=5)
+    d.text((24 + pad - bbox[0], 22 + pad - bbox[1]), label, font=font, fill="white")
+    im.save(path, "JPEG", quality=92)
+    return path
 
 
 # ================================================================ title / description
@@ -477,7 +602,7 @@ def metadata(picks: list[Pick], cfg: dict, day_label: str) -> dict:
                 system="Reply with one JSON object and nothing else - no prose, no code fences.",
                 messages=[{"role": "user", "content": META_PROMPT.format(
                     date=f"{d.day}. {d.month}. {d.year}", streamers=", ".join(streamers),
-                    titles="; ".join(titles), language=cfg["captions"]["language"])}])
+                    titles="; ".join(titles), language=cfg["captions"]["language"]) + insights.TEXT}])
             text = "".join(getattr(b, "text", "") or "" for b in msg.content if getattr(b, "type", "") == "text")
             data = json.loads(text[text.find("{"): text.rfind("}") + 1])
             if data.get("title") and not captions.is_unsafe(data["title"] + " " + data.get("intro", "")
@@ -644,7 +769,7 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
 
     meta = metadata(seq, cfg, day_label)
     # thumbnail from the original opening clip (no name tag / logo baked in yet)
-    thumb = thumbnail(seq[0].path, tmp / f"thumbnail-{day_label}.jpg", meta["thumbnail_text"], comp, tmp)
+    thumb = thumbnail(seq, tmp / f"thumbnail-{day_label}.jpg", meta["thumbnail_text"], cfg, tmp)
 
     segments = []
     seg_of: dict = {}

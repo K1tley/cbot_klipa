@@ -7,6 +7,7 @@ import os
 import re
 import unicodedata
 
+from . import insights
 from .sources import Clip
 
 log = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ def generate(clip: Clip, language: str, model: str) -> dict:
             system="You are a caption writer. Reply with one JSON object and nothing else - no prose, no code fences.",
             messages=[{"role": "user", "content": PROMPT.format(
                 creator=clip.creator, platform=clip.platform.capitalize(), title=clip.title,
-                game=clip.game or "unknown", language=language)}],
+                game=clip.game or "unknown", language=language) + insights.TEXT}],
         )
         text = "".join(getattr(b, "text", "") or "" for b in msg.content if getattr(b, "type", "") == "text")
         start, end = text.find("{"), text.rfind("}")

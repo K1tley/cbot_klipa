@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Python packages
-        run: pip install requests pyyaml tzdata google-api-python-client google-auth anthropic
+        run: pip install requests pyyaml tzdata google-api-python-client google-auth anthropic pillow
       - name: Post due clips
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

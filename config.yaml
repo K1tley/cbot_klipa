@@ -112,6 +112,17 @@ compilation:
     corner: false          # true = also a small logo in the top-right corner during the clips
     width: 160             # (size/opacity of that corner logo)
     opacity: 0.9
+  thumbnail:               # collage of the strongest clips (one per streamer)
+    panels: 3              # how many clips/streamers in the collage
+    ai_frame_pick: true    # Claude picks the most eye-catching frame of each clip (a few cents a day)
+    names: true            # streamer names at the bottom
+    episode_badge: true    # "#12" in the top-left corner
+    badge_color: [229, 37, 33]
+    text_color: [255, 222, 0]
+    text_size: 132
+    logo_size: 230
+    saturation: 1.35
+    contrast: 1.15
   teaser:                  # start of the video: "V dnešním videu uvidíte" + quick cuts from the best clips
     enabled: true
     clips: 4

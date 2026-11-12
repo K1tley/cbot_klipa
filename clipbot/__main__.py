@@ -145,6 +145,8 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
     if not force and state.get("last_fetch") == local.date().isoformat():
         log.info("Already fetched today — skipping.")
         return
+    from . import insights
+    insights.load(drive)
 
     cleanup(cfg, drive, state, local.date())
 
@@ -357,6 +359,11 @@ def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
         if item.get("thumb_drive_id"):
             thumb = drive.download(item["thumb_drive_id"], tmp / "thumb.jpg")
             try:
+                from .compilation import add_episode_badge
+                add_episode_badge(thumb, episode, cfg)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Could not add the episode badge: %s", e)
+            try:
                 yt.set_thumbnail(vid, thumb)
                 log.info("Thumbnail set.")
             except HttpError as e:
@@ -400,6 +407,8 @@ def cmd_compile(cfg: dict, force: bool) -> None:
         log.info("Today's compilation is already done — skipping.")
         return
     compilation.discover(cfg, drive, force=False)  # top up the channel list first
+    from . import insights
+    analytics = insights.load(drive)
     with tempfile.TemporaryDirectory() as tmp:
         item = compilation.build(cfg, drive, now, local, Path(tmp))
     state = drive.read_json(QUEUE, empty_state())  # re-read: other runs may have changed it
@@ -416,11 +425,11 @@ def cmd_compile(cfg: dict, force: bool) -> None:
     drive.write_json(QUEUE, state)
     if item and immediately:
         cmd_post(cfg, everything=True)
-    report_compile(cfg, drive, item)
+    report_compile(cfg, drive, item, analytics)
 
 
-def report_compile(cfg: dict, drive, item: dict | None) -> None:
-    from . import compilation
+def report_compile(cfg: dict, drive, item: dict | None, analytics: dict | None = None) -> None:
+    from . import compilation, insights
     from .report import Report
     L = compilation.LAST
     day = item["date"] if item else datetime.now(ZoneInfo(cfg["timezone"])).date().isoformat()
@@ -441,6 +450,7 @@ def report_compile(cfg: dict, drive, item: dict | None) -> None:
     r.table("Channels with clips (last 24 h)", ["Channel", "Platform", "Clips", "Best views", "Usual views",
                                                  "Best / usual", "Clips over min. views", "Peak live viewers",
                                                  "Size weight"], chans)
+    insights.report_tables(r, analytics or {})
     r.publish(drive, day, f"Compilation {day}")
 
 
