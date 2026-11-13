@@ -78,10 +78,10 @@ creators:
     platform: kick
     channel: restt
   - name: HaiseT
-    platform: twitch
+    platform: kick          # moved from Twitch to Kick in 2026
     channel: haiset
   - name: Flygun
-    platform: twitch
+    platform: kick          # moved from Twitch to Kick in 2026
     channel: flygun
 
 # ------------------------------------------------------------
