@@ -103,7 +103,7 @@ compilation:
   min_baseline: 10         # floor for a channel's usual views, so a tiny channel's 37 views isn't "18x normal"
   clips_per_channel: 10    # look at each channel's top N clips of the day
   max_clips_per_streamer: 4
-  max_clips_per_small_streamer: 2   # channels under popularity.reference_viewers (not your Shorts creators)
+  max_clips_per_small_streamer: 1   # channels under popularity.reference_viewers (not your Shorts creators)
   max_average_seconds: 40  # average clip length in the video stays at or below this
   name_tag: true           # streamer name in the bottom-left corner ...
   name_tag_seconds: 5      # ... for the first N seconds of each clip (0 = whole clip)
