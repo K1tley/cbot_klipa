@@ -124,7 +124,7 @@ compilation:
     saturation: 1.35
     contrast: 1.15
   teaser:                  # start of the video: "V dnešním videu uvidíte" + quick cuts from the best clips
-    enabled: true
+    enabled: false         # turned off: the quick cuts didn't show anything meaningful
     clips: 4
     seconds: 2.5           # length of each cut
     text: "V dnešním videu uvidíte"
