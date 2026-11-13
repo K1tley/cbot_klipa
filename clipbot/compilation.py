@@ -66,6 +66,9 @@ def discover(cfg: dict, drive, force: bool = False) -> None:
                 continue
             key = f"twitch:{s['user_login'].lower()}"
             ch = data["channels"].setdefault(key, {"first_seen": today, "history": []})
+            if ch.get("last_seen_run") != data.get("last_discovery"):
+                ch["seen_count"] = int(ch.get("seen_count", 1 if ch.get("last_seen") else 0)) + 1
+            ch["last_seen_run"] = data.get("last_discovery")
             ch.update(platform="twitch", channel=s["user_login"].lower(), name=s["user_name"],
                       id=s["user_id"], language=lang, last_seen=today,
                       peak_viewers=max(int(ch.get("peak_viewers", 0)), int(s.get("viewer_count", 0))))
@@ -80,12 +83,17 @@ def channel_pool(cfg: dict, data: dict, today) -> list[dict]:
     disc = comp.get("discover", {})
     active_days = int(disc.get("active_days", 14))
     pool: dict[str, dict] = {}
+    blocked = {str(b).strip().lower() for b in (comp.get("blocked_channels") or [])}
+    min_seen = int(disc.get("min_times_seen", 1))
     for key, ch in data["channels"].items():
         try:
             seen = datetime.fromisoformat(ch.get("last_seen", "2000-01-01")).date()
         except ValueError:
             continue
-        if (today - seen).days <= active_days and int(ch.get("peak_viewers", 0)) >= int(disc.get("min_viewers", 20)):
+        if ch.get("channel", key.split(":", 1)[-1]).lower() in blocked:
+            continue
+        if ((today - seen).days <= active_days and int(ch.get("peak_viewers", 0)) >= int(disc.get("min_viewers", 20))
+                and int(ch.get("seen_count", 1)) >= min_seen):
             pool[key] = dict(ch, key=key)
     ranked = sorted(pool.values(), key=lambda c: -int(c.get("peak_viewers", 0)))
     ranked = ranked[: int(disc.get("max_channels", 150))]
@@ -93,6 +101,8 @@ def channel_pool(cfg: dict, data: dict, today) -> list[dict]:
     # creators from the Shorts list + extra channels (Kick has no language search) are always included
     for c in list(cfg.get("creators", [])) + list(comp.get("extra_channels") or []):
         key = f"{c['platform'].lower()}:{c['channel'].lower()}"
+        if c["channel"].lower() in blocked:
+            continue
         known = data["channels"].get(key, {})
         entry = pool.setdefault(key, dict(known, key=key, platform=c["platform"].lower(),
                                           channel=c["channel"].lower(), name=c.get("name", c["channel"])))
@@ -136,6 +146,7 @@ def baseline(ch: dict, today_views: list[int], day_label: str) -> float:
 def select(picks: list[Pick], comp: dict) -> list[Pick]:
     min_s, max_s = float(comp["min_minutes"]) * 60, float(comp["max_minutes"]) * 60
     max_per = int(comp.get("max_clips_per_streamer", 4))
+    max_small = int(comp.get("max_clips_per_small_streamer", max_per))
     thr = float(comp.get("score_threshold", 2.0))
     max_avg = float(comp.get("max_average_seconds", 40))
     ranked = sorted(picks, key=lambda p: -p.score)
@@ -144,7 +155,8 @@ def select(picks: list[Pick], comp: dict) -> list[Pick]:
     total = 0.0
     for t in (thr, thr * 0.75, thr * 0.5, 0.0):  # relax the bar only if the day is too thin
         for p in ranked:
-            if p in chosen or p.score < t or per.get(who(p), 0) >= max_per:
+            limit = max_small if p.extra.get("small") else max_per
+            if p in chosen or p.score < t or per.get(who(p), 0) >= limit:
                 continue
             if total + p.duration > max_s:
                 continue
@@ -715,6 +727,8 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
                 continue
             seen_clips.add(x.clip_id)
             picks.append(Pick(clip=x, score=sf * factor * x.views / max(base, float(comp.get("min_baseline", 10))),
+                              extra={"small": not c.get("favorite") and int(c.get("peak_viewers") or 0)
+                                     < int((comp.get("popularity") or {}).get("reference_viewers", 500))},
                               duration=float(x.duration or length_rules.get("ideal_seconds", 30))))
     drive.write_json(CHANNELS, data)
     # the same moment clipped by several viewers -> keep only the best-scoring one
