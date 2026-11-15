@@ -154,10 +154,7 @@ compilation:
   # Kick can't be searched by language - add Kick (or extra Twitch) channels here by hand.
   # The creators from the Shorts list above are always included automatically.
   extra_channels:          # well-known CZ/SK streamers used in the compilation (not in the Shorts)
-    - {name: Spajkk, platform: kick, channel: spajkk}
     - {name: Kapesník, platform: kick, channel: kapesnik69}
-    - {name: Heddi, platform: kick, channel: heddi}
-    - {name: MGFitman, platform: kick, channel: mgfitman}
     - {name: Xnapy, platform: twitch, channel: xnapycz}
-    - {name: Bladeito, platform: twitch, channel: bladeito}
     - {name: Freeze, platform: twitch, channel: freezecz}
+    - {name: Claina, platform: twitch, channel: claina}
