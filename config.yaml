@@ -158,3 +158,5 @@ compilation:
     - {name: Xnapy, platform: twitch, channel: xnapycz}
     - {name: Freeze, platform: twitch, channel: freezecz}
     - {name: Claina, platform: twitch, channel: claina}
+    - {name: Miken, platform: kick, channel: miken}
+    - {name: Astatoro, platform: kick, channel: astatoro}
