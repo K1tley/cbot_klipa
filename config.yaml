@@ -68,9 +68,6 @@ creators:
   - name: Herdyn
     platform: twitch
     channel: herdyn
-  - name: CzechCloud
-    platform: kick
-    channel: czechcloud
   - name: FattyPillow
     platform: kick
     channel: fattypillow
@@ -83,6 +80,24 @@ creators:
   - name: Flygun
     platform: kick          # moved from Twitch to Kick in 2026
     channel: flygun
+  - name: Kapesník
+    platform: kick
+    channel: kapesnik69
+  - name: Miken
+    platform: kick
+    channel: miken
+  - name: Astatoro
+    platform: kick
+    channel: astatoro
+  - name: Xnapy
+    platform: twitch
+    channel: xnapycz
+  - name: Freeze
+    platform: twitch
+    channel: freezecz
+  - name: Claina
+    platform: twitch
+    channel: claina
 
 # ------------------------------------------------------------
 #  Daily long compilation (horizontal YouTube video)
@@ -153,10 +168,4 @@ compilation:
   blocked_channels: [terry_talk, czechcloud]     # e.g. [somechannel, otherchannel]
   # Kick can't be searched by language - add Kick (or extra Twitch) channels here by hand.
   # The creators from the Shorts list above are always included automatically.
-  extra_channels:          # well-known CZ/SK streamers used in the compilation (not in the Shorts)
-    - {name: Kapesník, platform: kick, channel: kapesnik69}
-    - {name: Xnapy, platform: twitch, channel: xnapycz}
-    - {name: Freeze, platform: twitch, channel: freezecz}
-    - {name: Claina, platform: twitch, channel: claina}
-    - {name: Miken, platform: kick, channel: miken}
-    - {name: Astatoro, platform: kick, channel: astatoro}
+  extra_channels: []      # extra CZ/SK streamers only for the compilation (not in the Shorts)
