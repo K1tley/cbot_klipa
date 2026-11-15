@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import captions, insights, media, sources
+from . import captions, insights, media, scene, sources
 
 log = logging.getLogger(__name__)
 CHANNELS = "channels.json"
@@ -169,6 +169,80 @@ def select(picks: list[Pick], comp: dict) -> list[Pick]:
         if total >= min_s:
             break
     return limit_dominance(chosen)
+
+
+def select_core(picks: list[Pick], comp: dict) -> tuple[list[Pick], dict]:
+    """Built mainly from the chosen creators (Pick.extra["core"]):
+      1. every chosen creator with a usable clip gets their best clip
+      2. abnormal clips from the CZ/SK top 10 of streamers with enough logs are added
+      3. more clips of the chosen creators, best score first (a creator with a great day gets several)
+      4. only if the video is still under min_minutes: the day's top CZ/SK clips fill the gap
+    Returns (chosen, info for the report)."""
+    min_s, max_s = float(comp["min_minutes"]) * 60, float(comp["max_minutes"]) * 60
+    max_per = int(comp.get("max_clips_per_streamer", 6))
+    thr = float(comp.get("score_threshold", 2.0))
+    max_avg = float(comp.get("max_average_seconds", 40))
+    sc = comp.get("scene") or {}
+    fill_per = int(sc.get("fill_clips_per_streamer", 2))
+    core = sorted((p for p in picks if p.extra.get("core")), key=lambda p: -p.score)
+    outside = [p for p in picks if not p.extra.get("core")]
+    chosen: list[Pick] = []
+    per: dict[str, int] = {}
+    total = 0.0
+    info = {"guaranteed": 0, "abnormal": 0, "core_extra": 0, "fill": 0}
+
+    def add(p: Pick, tag: str) -> bool:
+        nonlocal total
+        if p in chosen or total + p.duration > max_s:
+            return False
+        chosen.append(p)
+        per[who(p)] = per.get(who(p), 0) + 1
+        total += p.duration
+        p.extra["why"] = tag
+        info[tag] += 1
+        return True
+
+    # 1. one clip for every chosen creator who has one today (their best)
+    best: dict[str, Pick] = {}
+    for p in core:
+        best.setdefault(who(p), p)
+    for p in sorted(best.values(), key=lambda p: -p.score):
+        add(p, "guaranteed")
+    # 2. abnormal clips of the scene (streamer must have enough logs)
+    for p in sorted((p for p in outside if p.extra.get("abnormal") and p.extra.get("eligible")),
+                    key=lambda p: -p.clip.views):
+        if per.get(who(p), 0) < 1:
+            add(p, "abnormal")
+    # 3. more clips of the chosen creators, the bar is lowered only if the video is too short
+    for t in (thr, thr * 0.75, thr * 0.5, 0.0):
+        if total >= min_s:
+            break
+        for p in core:
+            if p in chosen or p.score < t or per.get(who(p), 0) >= max_per:
+                continue
+            if (total + p.duration) / (len(chosen) + 1) > max_avg and p.score < 1.5 * thr:
+                continue
+            add(p, "core_extra")
+            if total >= min_s and t < thr:  # lowered bar: only as much as needed
+                break
+    # strong clips of the chosen creators beyond the minimum (still within max_minutes)
+    for p in core:
+        if p in chosen or p.score < 1.5 * thr or per.get(who(p), 0) >= max_per:
+            continue
+        if (total + p.duration) / (len(chosen) + 1) > max_avg:
+            continue
+        add(p, "core_extra")
+    # 4. the chosen creators don't have enough footage: top CZ/SK clips of the day fill the gap
+    if total < min_s:
+        ranked = sorted(outside, key=lambda p: (-p.clip.views, -p.score))
+        for limit in list(range(1, fill_per + 1)) + [max_per]:  # last resort: more per streamer
+            for p in ranked:
+                if total >= min_s:
+                    break
+                if p in chosen or per.get(who(p), 0) >= limit:
+                    continue
+                add(p, "fill")
+    return limit_dominance(chosen), info
 
 
 def limit_dominance(chosen: list[Pick]) -> list[Pick]:
@@ -685,6 +759,7 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
     per_channel = int(comp.get("clips_per_channel", 10))
     picks: list[Pick] = []
     seen_clips: set[str] = set()
+    scene_clips: list = []  # every CZ/SK Twitch clip of the day, for the top-10 log
     for c in pool:
         try:
             if c["platform"] == "twitch":
@@ -702,6 +777,8 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
             log.warning("Clips for %s failed: %s", c["channel"], e)
             continue
         clips.sort(key=lambda x: -x.views)
+        if c["platform"] == "twitch":
+            scene_clips.extend(clips)
         found = len(clips)
         clips = clips[:per_channel]
         views = [x.views for x in clips]
@@ -727,7 +804,8 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
                 continue
             seen_clips.add(x.clip_id)
             picks.append(Pick(clip=x, score=sf * factor * x.views / max(base, float(comp.get("min_baseline", 10))),
-                              extra={"small": not c.get("favorite") and int(c.get("peak_viewers") or 0)
+                              extra={"core": bool(c.get("favorite")),
+                                     "small": not c.get("favorite") and int(c.get("peak_viewers") or 0)
                                      < int((comp.get("popularity") or {}).get("reference_viewers", 500))},
                               duration=float(x.duration or length_rules.get("ideal_seconds", 30))))
     drive.write_json(CHANNELS, data)
@@ -741,7 +819,30 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
     LAST["candidates"] = len(picks)
     LAST["scanned"] = len(pool)
 
-    chosen = select(picks, comp)
+    # CZ/SK top-10 log on Drive; marks abnormal clips and who has enough logs
+    try:
+        uniq = list({c.clip_id: c for c in scene_clips}.values())
+        sc_kept, _ = sources.drop_duplicates(uniq, key=lambda c: c.views)
+        sc = scene.update(drive, comp, day_label, sc_kept, tmp)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Scene log failed: %s", e)
+        sc = {"entries": [], "logs": {}, "by_clip": {}, "min_logs": 5}
+    LAST["scene"] = [[e["rank"], e["name"], e["views"], e["vs_top10"] or "", e["vs_person"] or "",
+                      e["logs"], "ANO" if e["abnormal"] else "", e["title"][:60], e["url"]] for e in sc["entries"]]
+    for p in picks:
+        e = sc["by_clip"].get(p.clip.clip_id)
+        if e and not p.extra.get("core"):
+            p.extra["abnormal"] = e["abnormal"]
+            p.extra["eligible"] = sc["logs"].get(p.clip.channel.lower(), 0) >= sc["min_logs"]
+
+    chosen, why = select_core(picks, comp)
+    LAST["why"] = why
+    missing_core = sorted({c.get("name", c["channel"]) for c in pool if c.get("favorite")}
+                          - {p.clip.creator for p in chosen})
+    LAST["missing_core"] = missing_core
+    log.info("Selection: %d guaranteed (one per chosen creator), %d abnormal scene clips, %d extra from "
+             "chosen creators, %d fill from the CZ/SK top. Chosen creators without a clip today: %s",
+             why["guaranteed"], why["abnormal"], why["core_extra"], why["fill"], ", ".join(missing_core) or "-")
     hard_min = float(comp.get("absolute_min_minutes", float(comp["min_minutes"]) * 0.6)) * 60
     if not chosen or sum(p.duration for p in chosen) < hard_min:
         log.info("Not enough good clips today (%d) — no compilation.", len(chosen))
@@ -774,7 +875,10 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
     t = (float(tcfg.get("clips", 4)) * float(tcfg.get("seconds", 2.5))
          + float((comp.get("transition") or {}).get("seconds", 0.6))) if tcfg.get("enabled", True) and len(seq) >= 3 else 0.0
     for i, p in enumerate(seq, 1):
-        LAST["order"].append([i, f"{int(t // 60)}:{int(t % 60):02d}", p.clip.creator, round(p.score, 1), p.clip.views,
+        LAST["order"].append([i, f"{int(t // 60)}:{int(t % 60):02d}", p.clip.creator,
+                              {"guaranteed": "1 per creator", "core_extra": "extra", "abnormal": "abnormal (scene)",
+                               "fill": "fill (CZ/SK top)"}.get(p.extra.get("why", ""), ""),
+                              round(p.score, 1), p.clip.views,
                               f"{p.duration:.0f} s", p.clip.title[:70], p.clip.url])
         t += p.duration + float((comp.get("transition") or {}).get("seconds", 0.6))
     for i, p in enumerate(seq, 1):

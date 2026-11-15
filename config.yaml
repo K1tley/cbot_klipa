@@ -111,8 +111,19 @@ compilation:
   min_views: 5             # ignore clips with fewer views than this, whatever the score
   min_baseline: 10         # floor for a channel's usual views, so a tiny channel's 37 views isn't "18x normal"
   clips_per_channel: 10    # look at each channel's top N clips of the day
-  max_clips_per_streamer: 4
-  max_clips_per_small_streamer: 1   # channels under popularity.reference_viewers (not your Shorts creators)
+  max_clips_per_streamer: 6   # a chosen creator with a great day can get up to this many clips
+  max_clips_per_small_streamer: 1   # (old setting, not used by the new selection)
+  # The video is built mainly from the creators list above: each of them with a clip today gets
+  # at least 1, the rest is filled with their best clips. Other CZ/SK streamers only get in with an
+  # abnormal clip (and enough logs), or as fill when the creators don't have enough for min_minutes.
+  scene:
+    top_clips: 10            # every day the top 10 CZ/SK Twitch clips are logged to Drive/Stats
+    min_logs: 5              # a streamer outside your list needs this many logs before an abnormal clip can get in
+    abnormal_vs_top10: 3.0   # abnormal = at least 3x the views of the other top-10 clips that day ...
+    abnormal_vs_person: 4.0  # ... or at least 4x what that streamer's logged clips usually get
+    person_min_history: 3    # (the second rule needs at least this many earlier logs of that streamer)
+    fill_clips_per_streamer: 2   # when filling up to min_minutes: max clips per outside streamer
+    keep_days: 120           # how long the log is kept
   max_average_seconds: 40  # average clip length in the video stays at or below this
   name_tag: true           # streamer name in the bottom-left corner ...
   name_tag_seconds: 5      # ... for the first N seconds of each clip (0 = whole clip)
@@ -162,6 +173,4 @@ compilation:
   blocked_channels: [terry_talk, czechcloud]     # e.g. [somechannel, otherchannel]
   # Kick can't be searched by language - add Kick (or extra Twitch) channels here by hand.
   # The creators from the Shorts list above are always included automatically.
-  extra_channels:          # extra CZ/SK streamers only for the compilation (not in the Shorts)
-    - {name: Xnapy, platform: twitch, channel: xnapycz}
-    - {name: Freeze, platform: twitch, channel: freezecz}
+  extra_channels: []      # extra CZ/SK streamers only for the compilation (not in the Shorts)

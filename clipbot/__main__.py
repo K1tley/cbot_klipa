@@ -444,8 +444,17 @@ def report_compile(cfg: dict, drive, item: dict | None, analytics: dict | None =
         r.text(L["note"])
     r.text(f"Scanned {L.get('scanned', '?')} channels, {L.get('candidates', '?')} candidate clips. "
            "Score = clip views / that streamer's usual clip views, adjusted for clip length.")
-    r.table("Order in the video", ["#", "Starts at", "Streamer", "Score", "Views", "Length", "Clip title", "Clip"],
-            L.get("order", []))
+    w = L.get("why") or {}
+    if w:
+        r.text(f"Selection: {w.get('guaranteed', 0)} clips = 1 per chosen creator, {w.get('core_extra', 0)} extra clips "
+               f"from chosen creators, {w.get('abnormal', 0)} abnormal clips from the CZ/SK top 10, "
+               f"{w.get('fill', 0)} fill clips from the CZ/SK top (only when the chosen creators had too little).")
+    if L.get("missing_core"):
+        r.text("Chosen creators with no usable clip today: " + ", ".join(L["missing_core"]))
+    r.table("Order in the video", ["#", "Starts at", "Streamer", "Why", "Score", "Views", "Length", "Clip title",
+                                   "Clip"], L.get("order", []))
+    r.table("CZ/SK Twitch top 10 today (logged in Drive/Stats)", ["#", "Streamer", "Views", "x vs top 10",
+            "x vs usual", "Logs", "Abnormal", "Clip title", "Clip"], L.get("scene", []))
     chans = sorted(L.get("channels", []), key=lambda x: -x[5])
     r.table("Channels with clips (last 24 h)", ["Channel", "Platform", "Clips", "Best views", "Usual views",
                                                  "Best / usual", "Clips over min. views", "Peak live viewers",
