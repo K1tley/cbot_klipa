@@ -150,7 +150,7 @@ compilation:
     active_days: 14        # forget channels not seen live for this long
     max_channels: 150      # scan at most this many (biggest first)
   # Channels that must never be used (e.g. foreign streamers with Czech set as their language):
-  blocked_channels: [terry_talk]     # e.g. [somechannel, otherchannel]
+  blocked_channels: [terry_talk, czechcloud]     # e.g. [somechannel, otherchannel]
   # Kick can't be searched by language - add Kick (or extra Twitch) channels here by hand.
   # The creators from the Shorts list above are always included automatically.
   extra_channels:          # well-known CZ/SK streamers used in the compilation (not in the Shorts)
