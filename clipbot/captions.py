@@ -25,11 +25,16 @@ Write in natural, fluent, grammatically correct {language}, the way a Czech/Slov
 Return ONLY a JSON object with:
 - "title": a catchy Shorts title, max 70 characters. Stay faithful to the original clip title's meaning -
   rephrase or tidy it, but don't invent events that the title doesn't suggest. Include the streamer's name
-  if it fits naturally. No hashtags in the title. Max one emoji. Never put a non-game stream category
-  ("Just Chatting", IRL etc.) in the title - in the hashtags it is fine.
+  if it fits naturally. No hashtags in the title. Max one emoji. NEVER put the game or the stream category
+  in the title (no "FattyPillow ve WoW Forever", "Agraelus v Just Chatting", "X hraje Y") - in the hashtags
+  it is fine. The title is about what happens, not where.
 - "line": one short, natural sentence for the description that adds something the title doesn't
   (context, a reaction, a question to viewers). If you have nothing meaningful to add, return "".
   Never write filler like "Clip from the stream of X playing Y".
+- "thumb_text": 2-5 punchy words for the thumbnail image, based on what the original clip title says happens
+  (e.g. "TOHLE NIKDO NEČEKAL", "NEJHORŠÍ SKOK"). Return "" if the original title is not interesting,
+  is gibberish, or you would only be able to write the streamer's name, the game or the category.
+  Never the game, the category or "streamer + game".
 - "hashtags": 5-8 hashtags (without the # sign), mixing: the streamer's name, the game (if any),
   broad reach tags (e.g. shorts, twitchclips or kickclips, gaming), and 1-2 {language} tags. No spaces inside a tag.
 
@@ -88,6 +93,33 @@ def strip_category(text: str) -> str:
     return re.sub(r"^[\s:–\-|,]+", "", out).strip()
 
 
+def _game_patterns(game: str) -> list[str]:
+    """Ways a game name shows up in a title: full, before a colon, acronym ('WoW'), acronym + subtitle."""
+    g = (game or "").strip()
+    if not g:
+        return []
+    main, _, sub = g.partition(":")
+    words = re.findall(r"[A-Za-z0-9]+", main)
+    acro = "".join(w[0] for w in words) if len(words) >= 2 else ""
+    out = {g, main.strip()}
+    if acro:
+        out.add(acro)
+        if sub.strip():
+            out.add(f"{acro} {sub.strip()}")
+    if sub.strip():
+        out.add(f"{main.strip()} {sub.strip()}")
+    return sorted((x for x in out if len(x) >= 2), key=len, reverse=True)
+
+
+def strip_game(text: str, game: str) -> str:
+    """Remove the game name (with a preposition like 've', 'v', 'na') from a title."""
+    out = text or ""
+    for pat in _game_patterns(game):
+        out = re.sub(r"\s*(?:\b(?:v|ve|na|pri|při|u|in|hraje|hrál|hrála)\s+)?(?<![A-Za-z0-9])" + re.escape(pat)
+                     + r"(?![A-Za-z0-9])", " ", out, flags=re.I)
+    return strip_category(out)
+
+
 def _is_gibberish(text: str) -> bool:
     real = [w for w in _words(text) if len(w) >= 3 and re.search(r"[aeiouy]", w)]
     return len(real) < 2
@@ -96,11 +128,15 @@ def _is_gibberish(text: str) -> bool:
 def _fallback(clip: Clip) -> dict:
     title = (clip.title or "").strip()
     if not title or is_unsafe(title) or _is_gibberish(title):
-        title = f"{clip.creator} – {game_of(clip)}" if game_of(clip) else f"{clip.creator} – moment ze streamu"
+        title = f"{clip.creator} – moment ze streamu"
     else:
-        title = f"{title} | {clip.creator}"
+        cleaned = strip_game(title, clip.game)
+        if len(_words(cleaned.replace(clip.creator, ""))) < 2:  # only the game was in it
+            title = f"{clip.creator} – moment ze streamu"
+        else:
+            title = f"{cleaned} | {clip.creator}"
     tags = [clip.creator, clip.game, "shorts", f"{clip.platform}clips", "gaming", "cesko", "czstreamer"]
-    return {"title": title, "line": "", "ai": False,
+    return {"title": title, "line": "", "ai": False, "thumb_text": "",
             "hashtags": [t for t in (_slug_tag(x) for x in tags if x) if t]}
 
 
@@ -125,7 +161,13 @@ def generate(clip: Clip, language: str, model: str) -> dict:
             return _fallback(clip)
         data = json.loads(text[start: end + 1])
         data["hashtags"] = [h for h in (_slug_tag(str(t).lstrip("#")) for t in data.get("hashtags", [])) if h]
-        data["title"] = strip_category(str(data.get("title", "")))
+        data["title"] = strip_game(str(data.get("title", "")), clip.game)
+        data["thumb_text"] = strip_game(str(data.get("thumb_text", "") or ""), clip.game)
+        if _ascii(data["thumb_text"]).lower().strip() in {"", _ascii(clip.creator).lower()} \
+                or is_unsafe(data["thumb_text"]) or len(data["thumb_text"]) > 40:
+            data["thumb_text"] = ""
+        if len(_words(data["title"].replace(clip.creator, ""))) < 2:  # nothing left besides the name
+            raise ValueError(f"title was only streamer + game: {data['title']!r}")
         if not data.get("title"):
             raise ValueError("empty title")
         if is_unsafe(data["title"]) or is_unsafe(data.get("line", "")):
@@ -142,7 +184,7 @@ def build_youtube_fields(clip: Clip, cap: dict) -> tuple[str, str, list[str]]:
     tags = cap["hashtags"]
     if "shorts" not in [t.lower() for t in tags]:
         tags = tags + ["shorts"]
-    title = re.sub(r"[<>]", "", strip_category(cap["title"])).strip()[:100]
+    title = re.sub(r"[<>]", "", strip_game(cap["title"], clip.game)).strip()[:100]
     platform = "Twitch" if clip.platform == "twitch" else "Kick"
     desc_lines = [
         cap.get("line", "").strip(),

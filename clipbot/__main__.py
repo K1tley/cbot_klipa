@@ -179,7 +179,8 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
                 try:
                     media.make_short(raw, final, bool(cfg["youtube"]["vertical"]),
                                      int(cfg["youtube"]["max_seconds"]), cfg.get("overlay"),
-                                     float(cfg["youtube"].get("background_saturation", 1.0)))
+                                     float(cfg["youtube"].get("background_saturation", 1.0)),
+                                     cfg.get("short_intro"))
                 except RuntimeError:
                     log.exception("Conversion failed for %s", clip.url)
                     continue
@@ -187,6 +188,8 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
                 file_id = drive.upload(final, name, folder)
                 cap = captions.generate(clip, cfg["captions"]["language"], cfg["captions"]["model"])
                 title, desc, tags = captions.build_youtube_fields(clip, cap)
+                thumb_id = make_short_thumb(cfg, drive, final, real or media.duration(raw), cap, folder,
+                                            name.replace(".mp4", "-thumb.jpg"), tmp)
                 new_items.append({
                     "key": f"{clip.platform}:{clip.clip_id}", "creator": creator, "platform": clip.platform,
                     "channel": clip.channel, "ai_caption": bool(cap.get("ai")),
@@ -194,6 +197,8 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
                     "source_url": clip.url, "source_title": clip.title, "views": clip.views,
                     "game": clip.game, "yt_title": title, "yt_description": desc, "yt_tags": tags,
                     "status": "pending", "attempts": 0, "scheduled_at": None, "youtube_id": None,
+                    "thumb_file_id": thumb_id, "thumb_text": cap.get("thumb_text", ""),
+                    "thumb": "pending" if thumb_id else None, "thumb_attempts": 0,
                 })
                 state["seen"][f"{clip.platform}:{clip.clip_id}"] = day_label
                 log.info("Saved %s  ->  \"%s\"", name, title)
@@ -213,6 +218,60 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
     if batch_mode(cfg):
         cmd_post(cfg, everything=True)
     report_fetch(cfg, drive, day_label, [i["key"] for i in new_items])
+
+
+def make_short_thumb(cfg: dict, drive, video: Path, clip_seconds: float, cap: dict, folder: str,
+                     name: str, tmp: Path) -> str | None:
+    """Thumbnail from the middle of the clip (after the static intro), with the AI's short text if it
+    found the clip title interesting. Saved next to the Short on Drive; set on YouTube after upload."""
+    t = cfg.get("short_thumbnail") or {}
+    if not t.get("enabled", True):
+        return None
+    try:
+        from .compilation import _font
+        intro = cfg.get("short_intro") or {}
+        start = float(intro.get("seconds", 0.5)) if intro.get("enabled") else 0.0
+        clip_seconds = min(clip_seconds or 10, float(cfg["youtube"]["max_seconds"]))
+        text = cap.get("thumb_text", "") if t.get("text", True) else ""
+        out = tmp / name
+        if not media.short_thumbnail(video, out, start + clip_seconds / 2, text, _font()):
+            return None
+        fid = drive.upload(out, name, folder, mimetype="image/jpeg")
+        out.unlink(missing_ok=True)
+        return fid
+    except Exception as e:  # noqa: BLE001 - a missing thumbnail must never stop the Short
+        log.warning("Could not make the thumbnail %s: %s", name, e)
+        return None
+
+
+def set_short_thumbnails(drive, yt, state: dict, tmp: Path, min_age_minutes: int = 3) -> None:
+    """YouTube accepts a Short's thumbnail only after it has processed the video, so thumbnails are set
+    a few minutes after the upload (and retried in later runs)."""
+    from googleapiclient.errors import HttpError
+    now = datetime.now(timezone.utc)
+    todo = [i for i in state["items"] if i.get("kind") != "long" and i["status"] == "posted"
+            and i.get("thumb") == "pending" and i.get("youtube_id") and i.get("thumb_file_id")
+            and parse_iso(i["posted_at"]) <= now - timedelta(minutes=min_age_minutes)]
+    for item in todo:
+        path = tmp / f"thumb-{item['youtube_id']}.jpg"
+        try:
+            drive.download(item["thumb_file_id"], path)
+            yt.set_thumbnail(item["youtube_id"], path)
+            item["thumb"] = "set"
+            log.info("Thumbnail set for %s", item["file_name"])
+        except Exception as e:  # noqa: BLE001
+            item["thumb_attempts"] = item.get("thumb_attempts", 0) + 1
+            if isinstance(e, HttpError) and "quotaExceeded" in str(e):
+                log.warning("Quota reached while setting thumbnails - will retry next run.")
+                break
+            if item["thumb_attempts"] >= 8:
+                item["thumb"] = "failed"
+            log.warning("Thumbnail for %s not set yet (attempt %d): %s", item["file_name"],
+                        item["thumb_attempts"], str(e)[:200])
+        finally:
+            path.unlink(missing_ok=True)
+    if todo:
+        drive.write_json(QUEUE, state)
 
 
 def report_fetch(cfg: dict, drive, day_label: str, keys: list[str]) -> None:
@@ -295,6 +354,9 @@ def cmd_post(cfg: dict, everything: bool = False) -> None:
         due = longs + [i for i in due if i.get("kind") != "long"][: int(cfg["posting"]["max_per_run"])]
     if not due:
         log.info("Nothing due to post.")
+        if any(i.get("thumb") == "pending" and i["status"] == "posted" for i in state["items"]):
+            with tempfile.TemporaryDirectory() as tmp:
+                set_short_thumbnails(drive, YouTube(), state, Path(tmp))
         return
     log.info("Uploading %d video(s)%s.", len(due), " (batch)" if everything or batch_mode(cfg) else "")
 
@@ -337,6 +399,7 @@ def cmd_post(cfg: dict, everything: bool = False) -> None:
                     item["status"] = "failed"
                 path.unlink(missing_ok=True)
                 drive.write_json(QUEUE, state)
+        set_short_thumbnails(drive, yt, state, Path(tmp))
 
 
 def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:

@@ -44,6 +44,20 @@ youtube:
   background_saturation: 1.2  # colour of the blurred background: 1.0 = unchanged, 1.2 = +20 %
   max_seconds: 179        # Shorts limit is 3 minutes
 
+# Every Short starts with a short TV static with the logo in the middle, then the clip.
+short_intro:
+  enabled: true
+  seconds: 0.5
+  logo_width: 560
+  volume: 0.12
+
+# Thumbnail of every Short: the frame from the middle of the clip (never the static). If the clip title is
+# interesting, the AI adds 2-5 punchy words (never the game / category). Set on YouTube a few minutes after
+# the upload, once YouTube has processed the video.
+short_thumbnail:
+  enabled: true
+  text: true
+
 # Logo / image placed on every video. Remove the "image" line (or the whole block) to turn it off.
 overlay:
   image: logo.png         # file in the main folder of the repo (PNG with transparent background)
