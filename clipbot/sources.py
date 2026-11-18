@@ -26,6 +26,7 @@ class Clip:
     media_urls: list[str] = field(default_factory=list)  # direct video URLs, if known
     stream_id: str = ""        # the VOD / livestream the clip was cut from (to spot duplicate moments)
     offset: float | None = None  # where in that stream the clip starts, in seconds (Twitch only)
+    language: str = ""           # stream language reported by the platform ("en", "cs", ...), if known
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -67,6 +68,51 @@ class Twitch:
             data = self._get("games", id=game_id).get("data", [])
             self._games[game_id] = data[0]["name"] if data else ""
         return self._games[game_id]
+
+    def game_ids(self, names: list[str]) -> dict[str, str]:
+        """Twitch game/category name -> id (e.g. 'Grand Theft Auto VI')."""
+        out: dict[str, str] = {}
+        for n in names:
+            data = self._get("games", name=n).get("data", [])
+            if data:
+                out[n] = data[0]["id"]
+                self._games[data[0]["id"]] = data[0]["name"]
+            else:
+                log.warning("Twitch category %r not found", n)
+        return out
+
+    def _clip(self, c: dict, creator: str, channel: str) -> Clip:
+        return Clip(
+            platform="twitch", clip_id=c["id"], creator=creator, channel=channel,
+            title=c.get("title", "").strip(), url=c["url"], views=int(c.get("view_count", 0)),
+            created_at=c.get("created_at", ""), game=self._game_name(c.get("game_id", "")),
+            duration=float(c.get("duration") or 0),
+            stream_id=str(c.get("video_id") or ""),
+            offset=float(c["vod_offset"]) if c.get("vod_offset") is not None else None,
+            language=str(c.get("language") or ""),
+        )
+
+    def game_clips(self, game_id: str, since: datetime, until: datetime, limit: int = 300) -> list[Clip]:
+        """Most viewed clips of a whole category (all streamers), newest window only."""
+        clips: list[Clip] = []
+        cursor = None
+        while len(clips) < limit:
+            params = dict(game_id=game_id, first=100, started_at=since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          ended_at=until.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            if cursor:
+                params["after"] = cursor
+            page = self._get("clips", **params)
+            for c in page.get("data", []):
+                created = _parse_time(c.get("created_at"))
+                if created and not (since <= created <= until):
+                    continue
+                name = c.get("broadcaster_name") or ""
+                login = name.lower() if name.isascii() else str(c.get("broadcaster_id"))
+                clips.append(self._clip(c, name, login))
+            cursor = page.get("pagination", {}).get("cursor")
+            if not cursor:
+                break
+        return clips
 
     def user_ids(self, logins: list[str]) -> dict[str, str]:
         """login -> broadcaster id, looked up 100 at a time."""
@@ -113,14 +159,7 @@ class Twitch:
                 created = _parse_time(c.get("created_at"))
                 if created and not (since <= created <= until):
                     continue
-                clips.append(Clip(
-                    platform="twitch", clip_id=c["id"], creator=creator, channel=channel,
-                    title=c.get("title", "").strip(), url=c["url"], views=int(c.get("view_count", 0)),
-                    created_at=c.get("created_at", ""), game=self._game_name(c.get("game_id", "")),
-                    duration=float(c.get("duration") or 0),
-                    stream_id=str(c.get("video_id") or ""),
-                    offset=float(c["vod_offset"]) if c.get("vod_offset") is not None else None,
-                ))
+                clips.append(self._clip(c, creator, channel))
             cursor = page.get("pagination", {}).get("cursor")
             if not cursor or len(clips) >= limit:
                 break
@@ -200,6 +239,78 @@ class Kick:
             ))
         log.debug("Kick %s: %d clips seen, %d in window", channel, len(raw), len(clips))
         return clips
+
+
+def _kick_clip(c: dict, creator: str | None = None, channel: str | None = None) -> Clip | None:
+    cid = str(c.get("id") or c.get("clip_id") or "")
+    if not cid or cid == "None":
+        return None
+    ch = c.get("channel") or {}
+    channel = channel or ch.get("slug") or ""
+    creator = creator or ch.get("username") or channel
+    cat = c.get("category") or {}
+    dur = float(c.get("duration") or 0)
+    if dur > 1000:  # some Kick responses give milliseconds
+        dur /= 1000
+    return Clip(
+        platform="kick", clip_id=cid, creator=creator, channel=channel,
+        title=(c.get("title") or "").strip(), url=f"https://kick.com/{channel}/clips/{cid}",
+        views=int(c.get("view_count") or c.get("views") or 0), created_at=c.get("created_at") or "",
+        game=cat.get("name", "") if isinstance(cat, dict) else "", duration=dur,
+        media_urls=[u for u in (c.get("video_url"), c.get("clip_url")) if u],
+        stream_id=str(c.get("livestream_id") or ""),
+    )
+
+
+def kick_category_clips(kick: "Kick", slug: str, since: datetime, until: datetime, pages: int = 8) -> list[Clip]:
+    """Most viewed clips of a whole Kick category (e.g. grand-theft-auto-vi), filtered to our window."""
+    raw: dict[str, dict] = {}
+    for time_range, n in (("day", pages), ("week", max(2, pages // 2))):
+        cursor = None
+        for _ in range(n):
+            url = f"https://kick.com/api/v2/categories/{slug}/clips?sort=view&time={time_range}"
+            if cursor:
+                url += f"&cursor={cursor}"
+            try:
+                data = kick._fetch(url)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Kick category request failed (%s): %s", url, e)
+                break
+            for c in data.get("clips") or []:
+                raw[str(c.get("id"))] = c
+            cursor = data.get("nextCursor")
+            if not cursor:
+                break
+    out = []
+    for c in raw.values():
+        created = _parse_time(c.get("created_at"))
+        if created and not (since <= created <= until):
+            continue
+        clip = _kick_clip(c)
+        if clip:
+            out.append(clip)
+    return out
+
+
+def kick_live(kick: "Kick", slug: str, pages: int = 5) -> list[dict]:
+    """Who is live in a Kick category right now: [{slug, name, language, viewers}]."""
+    out = []
+    for page in range(1, pages + 1):
+        try:
+            data = kick._fetch(f"https://kick.com/stream/livestreams/en?page={page}&limit=24&subcategory={slug}&sort=desc")
+        except Exception as e:  # noqa: BLE001
+            log.warning("Kick live list failed: %s", e)
+            break
+        items = data.get("data") or []
+        for it in items:
+            ch = it.get("channel") or {}
+            if not any((c or {}).get("slug") == slug for c in it.get("categories") or []):
+                continue
+            out.append({"slug": ch.get("slug", ""), "name": (ch.get("user") or {}).get("username") or ch.get("slug", ""),
+                        "language": it.get("language") or "", "viewers": int(it.get("viewer_count") or 0)})
+        if len(items) < 24:
+            break
+    return out
 
 
 DEFAULT_LENGTH = {"max_seconds": 60, "ideal_seconds": 30, "long_penalty": 0.5}

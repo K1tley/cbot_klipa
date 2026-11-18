@@ -721,9 +721,10 @@ def metadata(picks: list[Pick], cfg: dict, day_label: str) -> dict:
             "thumbnail_text": fallback["thumbnail_text"]}
 
 
-def episode_title(base: str, episode: int | None) -> str:
+def episode_title(base: str, episode: int | None, series_suffix: str | None = None) -> str:
     """'<AI title> | Klipy dne #N', shortened so it fits YouTube's 100-character limit."""
-    suffix = f" | Klipy dne #{episode}" if episode else " | Klipy dne"
+    label = series_suffix or "Klipy dne"
+    suffix = f" | {label} #{episode}" if episode else f" | {label}"
     room = 100 - len(suffix)
     base = base.strip()
     if len(base) > room:
@@ -849,6 +850,18 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         LAST["note"] = f"Not enough good clips today ({len(chosen)}, {sum(p.duration for p in chosen) / 60:.1f} min) - no video."
         return None
 
+    return produce(cfg, drive, chosen, tmp, day_label, label=day_label,
+                   meta_fn=lambda seq: metadata(seq, cfg, day_label),
+                   folder=("Compilations", day_label), key=f"compilation:{day_label}")
+
+
+def produce(cfg: dict, drive, chosen: list[Pick], tmp: Path, day_label: str, label: str, meta_fn,
+            folder: tuple, key: str, comp: dict | None = None) -> dict | None:
+    """Download the chosen clips, order them, render the video + thumbnail, store both on Drive and
+    return the queue item. Shared by the CZ compilation and the GTA channel."""
+    comp = comp or cfg["compilation"]
+    length_rules = {**sources.DEFAULT_LENGTH, **(cfg.get("clip_length") or {})}
+    hard_min = float(comp.get("absolute_min_minutes", float(comp["min_minutes"]) * 0.6)) * 60
     # download; drop failures, then order
     ready: list[Pick] = []
     for p in chosen:
@@ -864,8 +877,9 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
             ready.append(p)
         else:
             log.warning("Download failed: %s", p.clip.url)
-    ready = limit_dominance(ready)  # re-check the diversity rule after failed downloads
-    seq = order(ready, random.Random(day_label))
+    if comp.get("strict_alternation", True):
+        ready = limit_dominance(ready)  # re-check the diversity rule after failed downloads
+    seq = order(ready, random.Random(label))
     total = sum(p.duration for p in seq)
     if total < hard_min:
         log.info("Only %.1f min of clips downloaded — no compilation today.", total / 60)
@@ -885,9 +899,9 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         log.info("  %2d. %-14s score %.1f  %4d views  %4.0fs  %s", i, p.clip.creator, p.score, p.clip.views,
                  p.duration, p.clip.title[:60])
 
-    meta = metadata(seq, cfg, day_label)
+    meta = meta_fn(seq)
     # thumbnail from the original opening clip (no name tag / logo baked in yet)
-    thumb = thumbnail(seq, tmp / f"thumbnail-{day_label}.jpg", meta["thumbnail_text"], cfg, tmp)
+    thumb = thumbnail(seq, tmp / f"thumbnail-{label}.jpg", meta["thumbnail_text"], {**cfg, "compilation": comp}, tmp)
 
     segments = []
     seg_of: dict = {}
@@ -901,7 +915,7 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
         p.path.unlink(missing_ok=True)
     if not segments:
         return None
-    teaser = build_teaser(seq, seg_of, comp, tmp, random.Random(day_label + "teaser"))
+    teaser = build_teaser(seq, seg_of, comp, tmp, random.Random(label + "teaser"))
     if teaser:
         log.info("Teaser: %d quick cuts at the start.", len(teaser))
     # short TV static with the logo between every two clips
@@ -918,23 +932,25 @@ def build(cfg: dict, drive, now: datetime, local: datetime, tmp: Path) -> dict |
             segments_to_join = teaser + segments
     else:
         segments_to_join = teaser + segments
-    out = tmp / f"compilation-{day_label}.mp4"
+    out = tmp / f"compilation-{label}.mp4"
     concat(segments_to_join, out, tmp)
 
     for s in segments:
         s.unlink(missing_ok=True)
 
-    folder = drive.folder_path("Compilations", day_label)
-    video_id = drive.upload(out, out.name, folder)
-    thumb_id = drive.upload(thumb, thumb.name, folder, mimetype="image/jpeg") if thumb else None
+    folder_id = drive.folder_path(*folder)
+    video_id = drive.upload(out, out.name, folder_id)
+    thumb_id = drive.upload(thumb, thumb.name, folder_id, mimetype="image/jpeg") if thumb else None
     log.info("Compilation saved to Drive: %s (%.0f MB) -> \"%s\"", out.name, out.stat().st_size / 1e6, meta["title"])
     return {
-        "kind": "long", "key": f"compilation:{day_label}", "creator": "Compilation", "platform": "mix",
+        "kind": "long", "key": key, "creator": "Compilation", "platform": "mix",
         "date": day_label, "file_name": out.name, "drive_file_id": video_id, "thumb_drive_id": thumb_id,
         "source_url": "", "source_title": "", "views": sum(p.clip.views for p in seq),
         "base_title": meta["title"], "yt_title": episode_title(meta["title"], None),
         "yt_description": meta["description"], "yt_tags": meta["tags"],
         "ai_caption": True, "status": "pending", "attempts": 0, "youtube_id": None,
-        "clips": [{"creator": p.clip.creator, "url": p.clip.url, "views": p.clip.views,
-                   "score": round(p.score, 2)} for p in seq],
+        "clips": [{"creator": p.clip.creator, "url": p.clip.url, "views": p.clip.views, "id": p.clip.clip_id,
+                   "platform": p.clip.platform, "channel": p.clip.channel, "created_at": p.clip.created_at,
+                   "stream_id": p.clip.stream_id, "offset": p.clip.offset, "duration": p.duration,
+                   "title": p.clip.title, "score": round(p.score, 2)} for p in seq],
     }

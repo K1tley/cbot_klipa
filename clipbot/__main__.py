@@ -28,8 +28,12 @@ QUEUE = "queue.json"
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def load_config() -> dict:
-    with open(ROOT / "config.yaml", encoding="utf-8") as fh:
+def load_config(path: str | None = None) -> dict:
+    """config.yaml by default; another file with --config or the CLIPBOT_CONFIG env variable
+    (e.g. config_gta.yaml for the English GTA channel)."""
+    import os
+    name = path or os.environ.get("CLIPBOT_CONFIG") or "config.yaml"
+    with open(ROOT / name, encoding="utf-8") as fh:
         return yaml.safe_load(fh)
 
 
@@ -410,12 +414,20 @@ def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
     try:
         drive.download(item["drive_file_id"], path)
         # episode number is given only when the upload succeeds, so skipped days leave no gaps
-        episode = int(state.get("episode", int(comp.get("first_episode", 1)) - 1)) + 1
-        title = episode_title(item.get("base_title") or item["yt_title"], episode)
+        series = item.get("series")  # GTA channel: every group / the best-of has its own numbering
+        if series:
+            episode = int(state.setdefault("episodes", {}).get(series, 0)) + 1
+            title = episode_title(item.get("base_title") or item["yt_title"], episode, item.get("title_suffix"))
+        else:
+            episode = int(state.get("episode", int(comp.get("first_episode", 1)) - 1)) + 1
+            title = episode_title(item.get("base_title") or item["yt_title"], episode)
         pub = publish_time(cfg, item, datetime.now(timezone.utc))
         vid = yt.upload(path, title, item["yt_description"], item["yt_tags"],
                         cfg["youtube"]["category_id"], comp.get("privacy", "private"), publish_at=pub)
-        state["episode"] = episode
+        if series:
+            state["episodes"][series] = episode
+        else:
+            state["episode"] = episode
         item.update(status="posted", youtube_id=vid, posted_at=iso(datetime.now(timezone.utc)),
                     yt_title=title, episode=episode)
         log.info("Posted compilation #%d \"%s\" -> https://youtube.com/watch?v=%s", episode, title, vid)
@@ -526,6 +538,35 @@ def report_compile(cfg: dict, drive, item: dict | None, analytics: dict | None =
     r.publish(drive, day, f"Compilation {day}")
 
 
+def cmd_gta(cfg: dict, job: str, group: str | None, force: bool) -> None:
+    """English GTA channel: one compilation per streamer group (every gta.groups.every_hours) and
+    a daily 'Best GTA 6 clips of the day'. Uses its own config (config_gta.yaml) and Drive folder."""
+    from . import gta
+    from .google_apis import Drive
+    drive = Drive(cfg["drive_root_folder"])
+    state = drive.read_json(QUEUE, empty_state())
+    cleanup(cfg, drive, state, datetime.now(ZoneInfo(cfg["timezone"])).date())
+    drive.write_json(QUEUE, state)
+    import os
+    items = gta.run(cfg, drive, job, group, force)
+    can_post = bool(os.environ.get("YOUTUBE_REFRESH_TOKEN"))
+    if not can_post:
+        log.warning("YOUTUBE_REFRESH_TOKEN_GTA is not set - videos stay on Drive and go up once it is.")
+    if not items:
+        if can_post:
+            cmd_post(cfg, everything=True)  # retry anything that failed to upload last time
+        return
+    state = drive.read_json(QUEUE, empty_state())
+    now = iso(datetime.now(timezone.utc))
+    for item in items:
+        item["scheduled_at"] = now
+        state["items"] = [i for i in state["items"] if i.get("key") != item["key"]] + [item]
+    drive.write_json(QUEUE, state)
+    if can_post:
+        cmd_post(cfg, everything=True)
+    gta.report(cfg, drive, items)
+
+
 def cmd_cleanup(cfg: dict) -> None:
     from .google_apis import Drive
     drive = Drive(cfg["drive_root_folder"])
@@ -548,14 +589,18 @@ def cmd_status(cfg: dict) -> None:
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser(prog="clipbot")
-    ap.add_argument("command", choices=["fetch", "post", "cleanup", "status", "discover", "compile"])
+    ap.add_argument("command", choices=["fetch", "post", "cleanup", "status", "discover", "compile", "gta"])
+    ap.add_argument("job", nargs="?", default="all", help="gta only: groups | best | all")
+    ap.add_argument("--group", help="gta groups: only this group (name)")
+    ap.add_argument("--config", help="config file (default config.yaml or $CLIPBOT_CONFIG)")
     ap.add_argument("--force", action="store_true", help="fetch now, ignoring the clock and today's run")
     args = ap.parse_args(argv)
-    cfg = load_config()
+    cfg = load_config(args.config)
     {"fetch": lambda: cmd_fetch(cfg, args.force), "post": lambda: cmd_post(cfg),
      "cleanup": lambda: cmd_cleanup(cfg), "status": lambda: cmd_status(cfg),
      "discover": lambda: cmd_discover(cfg, args.force),
-     "compile": lambda: cmd_compile(cfg, args.force)}[args.command]()
+     "compile": lambda: cmd_compile(cfg, args.force),
+     "gta": lambda: cmd_gta(cfg, args.job, args.group, args.force)}[args.command]()
 
 
 if __name__ == "__main__":

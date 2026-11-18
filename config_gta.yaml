@@ -1,0 +1,132 @@
+# English GTA channel - compilations only (no Shorts).
+# Run:  python -m clipbot gta [groups|best|all] [--group CORE] [--force] --config config_gta.yaml
+# Workflow: .github/workflows/gta.yml (manual "Run workflow" + automatic every 8 h via cron-job.org).
+
+timezone: Europe/Prague
+drive_root_folder: ClipBotGTA      # own folder on Google Drive (queue, used-clips history, videos, reports)
+retention_days: 3                  # videos on Drive older than this are deleted (the history is kept)
+
+clip_length:
+  max_seconds: 60                  # hard limit: longer clips are never used
+  ideal_seconds: 30                # up to this length a clip's views count fully ...
+  long_penalty: 0.5                # ... a clip at max_seconds counts at 50 %
+
+gta:
+  games: ["Grand Theft Auto V", "Grand Theft Auto VI"]   # only clips from these categories (Twitch + Kick)
+  history_days: 60                 # remember used clips this long, so they never come back
+
+  groups:                          # one compilation per group of streamers who share viewers
+    enabled: true
+    every_hours: 8                 # a new video per group at most every 8 h (only clips not used before)
+    lookback_hours: 24             # look at clips from the last 24 h
+    target_minutes: 12             # aim for ~12 min ...
+    min_minutes: 10
+    max_minutes: 25                # ... never longer than 25 min
+    absolute_min_minutes: 3        # if there's less than this of new clips: no video this time
+    min_views: 20
+    max_clips_per_streamer: 8
+    normalise: true                # rank by views relative to that streamer's usual views (small members get a chance)
+    same_scene_seconds: 45         # two members clipped within 45 s = probably the same scene from two POVs -> keep one
+    list:
+      - name: CORE
+        suffix: CORE GTA Highlights
+        members:
+          - {name: Stable Ronaldo, twitch: stableronaldo}
+          - {name: JasonTheWeen, twitch: jasontheween}
+          - {name: Lacy, twitch: lacy}
+          - {name: Marlon, twitch: marlon}
+          - {name: Silky, twitch: silky}
+          - {name: Adapt, twitch: adapt}
+          - {name: Clix, twitch: clix}
+      - name: Kai Cenat & AMP
+        suffix: Kai Cenat & AMP GTA Highlights
+        members:
+          - {name: Kai Cenat, twitch: kaicenat}
+          - {name: Agent00, twitch: agent00}
+          - {name: Fanum, twitch: fanum}
+      - name: Kick Crew
+        suffix: Kick GTA Highlights
+        members:
+          - {name: xQc, twitch: xqc, kick: xqc}
+          - {name: Adin Ross, kick: adinross}
+          - {name: N3on, kick: n3on}
+      - name: GTA RP
+        suffix: GTA RP Highlights
+        members:
+          - {name: Buddha, twitch: buddha, kick: buddha}
+          - {name: dasMEHDI, twitch: dasmehdi, kick: dasmehdi}
+          - {name: Burn, twitch: burn}
+          - {name: Zerkaa, twitch: zerkaa}
+          - {name: Penta, twitch: penta}
+          - {name: EsfandTV, twitch: esfandtv}
+          - {name: Kaysan, twitch: kaysan, kick: kaysan}
+
+  best:                            # "Best GTA 6 clips of the day"
+    enabled: true
+    hour: 6                        # once a day, first run at/after 06:00 Prague time
+    suffix: GTA 6 Best Clips of the Day
+    lookback_hours: 24
+    target_minutes: 18             # 15-20 min of the most viewed clips
+    min_minutes: 15
+    max_minutes: 20
+    absolute_min_minutes: 8
+    min_views: 200
+    max_clips_per_streamer: 3
+    reuse_group_clips: true        # true = may contain clips that were already in a group video (never its own repeats)
+    twitch_game: Grand Theft Auto VI
+    twitch_languages: [en]
+    twitch_clips: 400
+    kick_category: grand-theft-auto-vi
+    kick_categories: [grand-theft-auto-vi, grand-theft-auto-v]   # where English Kick channels are looked for
+    kick_languages: [English]
+    kick_min_viewers: 300
+    kick_keep_days: 30
+    kick_pages: 8
+    extra_kick_channels: []        # English Kick channels to always include
+
+compilation:                       # how the videos look (same engine as the CZ channel)
+  privacy: private                 # uploaded as private until the YouTube API audit is done
+  min_minutes: 10
+  max_minutes: 25
+  name_tag: true
+  name_tag_seconds: 5
+  crf: 23
+  logo:
+    image: logo_gta.png            # put the channel logo (PNG, transparent background) in the repo root
+    corner: false
+  thumbnail:
+    panels: 3
+    ai_frame_pick: true
+    names: true
+    episode_badge: true
+    badge_color: [229, 37, 33]
+    text_color: [255, 222, 0]
+    text_size: 132
+    logo_size: 230
+    saturation: 1.35
+    contrast: 1.15
+  teaser:
+    enabled: false
+  fade_out_seconds: 1.5
+  transition:
+    enabled: true
+    seconds: 0.6
+    logo: true
+    logo_width: 460
+    volume: 0.12
+
+posting:
+  mode: batch
+  quiet_hours: null
+  max_per_run: 10
+
+youtube:
+  privacy: private
+  schedule_publish: false
+  category_id: "20"                # Gaming
+
+captions:
+  language: English
+  model: claude-sonnet-5-5
+
+creators: []                       # no Shorts on this channel
