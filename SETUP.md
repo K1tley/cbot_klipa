@@ -150,6 +150,39 @@ Everything is in `config.yaml`:
 To see the queue, open the `ClipBot/queue.json` file in Drive. Each clip there has its planned time, status
 (`pending` / `posted` / `failed`), title and YouTube ID.
 
+## English GTA channel (second YouTube channel, compilations only)
+
+Same code, its own settings in `config_gta.yaml`, its own Drive folder (`ClipBotGTA`) and its own workflow
+(`.github/workflows/gta.yml`). It makes:
+
+* **Group videos**: one compilation per streamer group (CORE, Kai Cenat & AMP, Kick Crew, GTA RP), at most every
+  8 h, only GTA V / GTA VI clips from Twitch and Kick. Aim ~12 min (max 25). If there isn't enough new material it is
+  shorter, and under 3 min there's no video. Title: `<AI title> | CORE GTA Highlights #N` (own numbering per group).
+* **Best GTA 6 clips of the day**: once a day (from 06:00 Prague), the most viewed **English** GTA VI clips of the last
+  24 h from Twitch and Kick, 15-20 min. Title: `<AI title> | GTA 6 Best Clips of the Day #N`.
+* **No repeats**: every used clip is saved in `ClipBotGTA/gta_used.json` (60 days), including the moment it shows, so
+  a second clip of the same moment, the same moment on Twitch + Kick (simulcast), or two members' POVs of the same
+  scene are skipped too. The best-of only avoids its own earlier clips, so it may contain a clip that was already in a
+  group video (`gta.best.reuse_group_clips: false` turns that off).
+
+Setup:
+1. Create the new YouTube channel (a brand channel on your Google account is easiest) and verify it by phone
+   (youtube.com/verify), otherwise custom thumbnails don't work.
+2. OAuth Playground (step 3d), scope `https://www.googleapis.com/auth/youtube.upload` only. When Google asks
+   which channel, pick the **GTA channel**. Save the refresh token as the GitHub secret **`YOUTUBE_REFRESH_TOKEN_GTA`**.
+   Everything else (Twitch, Google client, Drive token, Anthropic) is shared with the CZ channel.
+3. Put the channel logo as `logo_gta.png` (PNG, transparent background) in the repo root. Without it the videos
+   work, just without a logo in the static transitions and the thumbnail.
+4. cron-job.org: a new job like the CZ ones, URL
+   `https://api.github.com/repos/K1tley/cbot_klipa/actions/workflows/gta.yml/dispatches`, body
+   `{"ref":"main","inputs":{"job":"all","group":"","force":"false"}}`, every 8 h (e.g. 06:23, 14:23, 22:23).
+   With `"force":"false"` each run only makes what is due.
+5. Manual run: **Actions → GTA channel → Run workflow** (choose all / groups / best, optionally one group).
+
+Groups and members are in `config_gta.yaml` under `gta.groups.list` (`twitch:` login and/or `kick:` slug).
+Without `YOUTUBE_REFRESH_TOKEN_GTA` the videos are still made and stored on Drive; they go up on the first run
+after the secret is added (within 3 days, then Drive deletes them).
+
 ## Troubleshooting
 
 | What you see in the log | What it means |

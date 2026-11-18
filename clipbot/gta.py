@@ -239,8 +239,10 @@ def choose(picks: list[Pick], job: dict, one_per_member: bool) -> list[Pick]:
 
     if one_per_member:
         firsts: dict[str, Pick] = {}
+        floor = int(job.get("guaranteed_min_views", 150))
         for p in ranked:
-            firsts.setdefault(who(p), p)
+            if p.clip.views >= floor:
+                firsts.setdefault(who(p), p)
         for p in firsts.values():
             if total + p.duration <= max_s:
                 add(p)
@@ -257,6 +259,7 @@ def choose(picks: list[Pick], job: dict, one_per_member: bool) -> list[Pick]:
 META_PROMPT = """You name a YouTube compilation of the best GTA clips from Twitch and Kick streamers.
 
 Video: {kind}
+Game(s) in the clips: {games} (say "GTA 6" for Grand Theft Auto VI; only say "RP" if the game list or titles say roleplay)
 Streamers in the video (most clips first): {streamers}
 Some of the clip titles (written by random viewers, may be slang or jokes): {titles}
 
@@ -277,6 +280,10 @@ def metadata(seq: list[Pick], cfg: dict, kind: str, fallback_title: str) -> dict
     for p in seq:
         counts[p.clip.creator] = counts.get(p.clip.creator, 0) + 1
     streamers = sorted(counts, key=lambda s: -counts[s])
+    gc: dict[str, int] = {}
+    for p in seq:
+        gc[p.clip.game or "?"] = gc.get(p.clip.game or "?", 0) + 1
+    games = ", ".join(f"{k} ({v} clips)" for k, v in sorted(gc.items(), key=lambda kv: -kv[1]))
     out = {"title": fallback_title, "intro": f"The best GTA moments from {', '.join(streamers[:3])} and more.",
            "thumbnail_text": "INSANE MOMENTS", "hashtags": ["gta6", "gtavi", "gta", "twitchclips", "kickclips"]}
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -288,7 +295,7 @@ def metadata(seq: list[Pick], cfg: dict, kind: str, fallback_title: str) -> dict
                 model=cfg["captions"]["model"], max_tokens=1500,
                 system="Reply with one JSON object and nothing else - no prose, no code fences.",
                 messages=[{"role": "user", "content": META_PROMPT.format(
-                    kind=kind, streamers=", ".join(streamers), titles="; ".join(titles))}])
+                    kind=kind, streamers=", ".join(streamers), titles="; ".join(titles), games=games)}])
             text = "".join(getattr(b, "text", "") or "" for b in msg.content if getattr(b, "type", "") == "text")
             data = json.loads(text[text.find("{"): text.rfind("}") + 1])
             if data.get("title") and not captions.is_unsafe(" ".join(str(data.get(k, "")) for k in

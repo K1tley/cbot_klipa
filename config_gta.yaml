@@ -23,7 +23,8 @@ gta:
     min_minutes: 10
     max_minutes: 25                # ... never longer than 25 min
     absolute_min_minutes: 3        # if there's less than this of new clips: no video this time
-    min_views: 20
+    min_views: 50
+    guaranteed_min_views: 150     # a member gets a guaranteed spot only with a clip of at least this many views
     max_clips_per_streamer: 8
     normalise: true                # rank by views relative to that streamer's usual views (small members get a chance)
     same_scene_seconds: 45         # two members clipped within 45 s = probably the same scene from two POVs -> keep one
