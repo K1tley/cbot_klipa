@@ -644,7 +644,22 @@ def add_episode_badge(path: Path, episode: int, cfg: dict) -> Path:
     word = str(tcfg.get("badge_word", "DÍL"))
     num = str(episode)
     W, H = im.size
-    if style == "corner":
+    if style == "text":  # just "#N" in a display font, white with a black outline and a soft shadow
+        from PIL import ImageFilter, ImageFont
+        font_file = ROOT / str(tcfg.get("badge_font", "fonts/Anton-Regular.ttf"))
+        size = int(tcfg.get("badge_size", 130))
+        font = ImageFont.truetype(str(font_file), size) if font_file.exists() else ImageFont.truetype(_font(), size)
+        label = f"#{num}"
+        fill = tuple(tcfg.get("badge_text_color", [255, 255, 255]))
+        stroke = max(size // 16, 4)
+        bb = ImageDraw.Draw(im).textbbox((0, 0), label, font=font, stroke_width=stroke)
+        x, y = 34 - bb[0], 24 - bb[1]
+        shadow = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).text((x + 6, y + 8), label, font=font, fill=(0, 0, 0, 200),
+                                    stroke_width=stroke, stroke_fill=(0, 0, 0, 200))
+        im.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(7)))
+        ImageDraw.Draw(im).text((x, y), label, font=font, fill=fill, stroke_width=stroke, stroke_fill=(0, 0, 0))
+    elif style == "corner":
         size = 360
         layer = Image.new("RGBA", (size * 2, size * 2), (0, 0, 0, 0))
         d = ImageDraw.Draw(layer)

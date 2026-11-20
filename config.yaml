@@ -150,9 +150,13 @@ compilation:
   thumbnail:               # collage of the strongest clips (one per streamer)
     panels: 3              # how many clips/streamers in the collage
     ai_frame_pick: true    # Claude picks the most eye-catching frame of each clip (a few cents a day)
-    names: true            # streamer names at the bottom
+    names: false            # streamer names at the bottom
     episode_badge: true    # "#12" in the top-left corner
     badge_color: [229, 37, 33]
+    badge_style: text      # "#N" in a display font (other styles: box, label, tag, glass, corner)
+    badge_font: fonts/Anton-Regular.ttf
+    badge_text_color: [255, 255, 255]
+    badge_size: 140
     text_color: [255, 222, 0]
     text_size: 132
     logo_size: 230
