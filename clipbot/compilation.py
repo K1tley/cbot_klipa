@@ -630,21 +630,88 @@ def thumbnail(picks: list, out: Path, text: str, cfg: dict, tmp: Path) -> Path |
 
 
 def add_episode_badge(path: Path, episode: int, cfg: dict) -> Path:
-    """Draw '#N' in the top-left corner (done at upload time, when the episode number is known)."""
+    """Episode number on the thumbnail (done at upload time, when the number is known).
+    thumbnail.badge_style: "box" (old red box), "corner" (diagonal ribbon), "label" (DÍL + big number,
+    no box), "tag" (slanted yellow tag like the panels), "glass" (dark bar with accent line)."""
     from PIL import Image, ImageDraw
     tcfg = cfg["compilation"].get("thumbnail") or {}
     if not tcfg.get("episode_badge", True):
         return path
-    im = Image.open(path).convert("RGB")
-    d = ImageDraw.Draw(im)
-    label = f"#{episode}"
-    font, bbox = _fit_font(d, label, 400, 96, 0)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    pad = 22
-    d.rounded_rectangle([24, 22, 24 + tw + 2 * pad, 22 + th + 2 * pad + 6], radius=22,
-                        fill=tuple(tcfg.get("badge_color", [229, 37, 33])), outline="white", width=5)
-    d.text((24 + pad - bbox[0], 22 + pad - bbox[1]), label, font=font, fill="white")
-    im.save(path, "JPEG", quality=92)
+    im = Image.open(path).convert("RGBA")
+    style = tcfg.get("badge_style", "box")
+    accent = tuple(tcfg.get("badge_color", [229, 37, 33]))
+    yellow = tuple(tcfg.get("text_color", [255, 222, 0]))
+    word = str(tcfg.get("badge_word", "DÍL"))
+    num = str(episode)
+    W, H = im.size
+    if style == "corner":
+        size = 360
+        layer = Image.new("RGBA", (size * 2, size * 2), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        band = 120
+        d.polygon([(0, size - band), (size - band, 0), (size + 0, 0), (0, size)], fill=(*accent, 255))
+        d.line([(0, size - band - 6), (size - band - 6, 0)], fill="white", width=6)
+        font, bb = _fit_font(d, f"#{num}", 200, 74, 0)
+        txt = Image.new("RGBA", (400, 140), (0, 0, 0, 0))
+        td = ImageDraw.Draw(txt)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        td.text(((400 - tw) / 2 - bb[0], (140 - th) / 2 - bb[1]), f"#{num}", font=font, fill="white",
+                stroke_width=3, stroke_fill=(0, 0, 0))
+        txt = txt.rotate(45, expand=True, resample=Image.BICUBIC)
+        cx = cy = (size - band / 2) / 2
+        layer.alpha_composite(txt, (int(cx - txt.width / 2), int(cy - txt.height / 2)))
+        im.alpha_composite(layer.crop((0, 0, W, H)) if layer.width >= W else layer, (0, 0))
+    elif style == "label":
+        d = ImageDraw.Draw(im)
+        f1, b1 = _fit_font(d, word, 400, 46, 0)
+        f2, b2 = _fit_font(d, num, 400, 150, 0)
+        x, y = 34, 22
+        d.text((x - b1[0], y - b1[1]), word, font=f1, fill=yellow, stroke_width=6, stroke_fill=(0, 0, 0))
+        y += b1[3] - b1[1] + 10
+        d.text((x - b2[0] - 4, y - b2[1]), num, font=f2, fill="white", stroke_width=9, stroke_fill=(0, 0, 0))
+    elif style == "tag":
+        d = ImageDraw.Draw(im)
+        f1, b1 = _fit_font(d, word, 300, 40, 0)
+        f2, b2 = _fit_font(d, num, 300, 104, 0)
+        w1, w2 = b1[2] - b1[0], b2[2] - b2[0]
+        h = b2[3] - b2[1] + 44
+        slant = 28
+        x0, y0 = 0, 30
+        width = w1 + w2 + 90 + slant
+        shadow = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).polygon([(x0, y0 + 8), (x0 + width + 8, y0 + 8), (x0 + width - slant + 8, y0 + h + 8),
+                                        (x0, y0 + h + 8)], fill=(0, 0, 0, 150))
+        im.alpha_composite(shadow)
+        d = ImageDraw.Draw(im)
+        d.polygon([(x0, y0), (x0 + width, y0), (x0 + width - slant, y0 + h), (x0, y0 + h)], fill=(*yellow, 255))
+        cy = y0 + h / 2
+        d.text((x0 + 30 - b1[0], cy - (b1[3] - b1[1]) / 2 - b1[1] + 8), word, font=f1, fill=(15, 15, 15))
+        d.text((x0 + 30 + w1 + 18 - b2[0], cy - (b2[3] - b2[1]) / 2 - b2[1]), num, font=f2, fill=(15, 15, 15))
+    elif style == "glass":
+        d = ImageDraw.Draw(im)
+        f1, b1 = _fit_font(d, word, 300, 38, 0)
+        f2, b2 = _fit_font(d, num, 300, 96, 0)
+        w = max(b1[2] - b1[0], b2[2] - b2[0]) + 64
+        h = (b1[3] - b1[1]) + (b2[3] - b2[1]) + 58
+        panel = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        pd = ImageDraw.Draw(panel)
+        pd.rounded_rectangle([26, 24, 26 + w, 24 + h], radius=18, fill=(10, 10, 14, 185))
+        pd.rectangle([26, 24 + 18, 26 + 9, 24 + h - 18], fill=(*yellow, 255))
+        im.alpha_composite(panel)
+        d = ImageDraw.Draw(im)
+        tx = 26 + 32
+        d.text((tx - b1[0], 24 + 18 - b1[1]), word, font=f1, fill=yellow)
+        d.text((tx - b2[0] - 3, 24 + 18 + (b1[3] - b1[1]) + 12 - b2[1]), num, font=f2, fill="white")
+    else:  # "box" - the original red box
+        d = ImageDraw.Draw(im)
+        label = f"#{num}"
+        font, bbox = _fit_font(d, label, 400, 96, 0)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        pad = 22
+        d.rounded_rectangle([24, 22, 24 + tw + 2 * pad, 22 + th + 2 * pad + 6], radius=22,
+                            fill=accent, outline="white", width=5)
+        d.text((24 + pad - bbox[0], 22 + pad - bbox[1]), label, font=font, fill="white")
+    im.convert("RGB").save(path, "JPEG", quality=92)
     return path
 
 
