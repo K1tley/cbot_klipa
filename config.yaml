@@ -170,7 +170,7 @@ compilation:
   fade_out_seconds: 1.5    # fade to black at the very end of the video (0 = off)
   transition:              # short TV static between clips, with the logo in the middle
     enabled: true
-    seconds: 0.6
+    seconds: 0.3
     logo: true
     logo_width: 460
     volume: 0.12           # loudness of the static noise (0.0 - 1.0)
