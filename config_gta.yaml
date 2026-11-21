@@ -16,7 +16,7 @@ gta:
   history_days: 60                 # remember used clips this long, so they never come back
 
   groups:                          # one compilation per group of streamers who share viewers
-    enabled: true
+    enabled: false           # OFF for now (user's request)
     every_hours: 8                 # a new video per group at most every 8 h (only clips not used before)
     lookback_hours: 24             # look at clips from the last 24 h
     target_minutes: 12             # aim for ~12 min ...
@@ -63,7 +63,7 @@ gta:
           - {name: Kaysan, twitch: kaysan, kick: kaysan}
 
   best:                            # "Best GTA 6 clips of the day"
-    enabled: true
+    enabled: false           # OFF for now (user's request)
     hour: 6                        # once a day, first run at/after 06:00 Prague time
     suffix: GTA 6 Best Clips of the Day
     lookback_hours: 24
