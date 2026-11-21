@@ -455,7 +455,11 @@ def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
         drive.download(item["drive_file_id"], path)
         # episode number is given only when the upload succeeds, so skipped days leave no gaps
         series = item.get("series")  # GTA channel: every group / the best-of has its own numbering
-        if series:
+        fixed = item.get("replaces_episode")  # a re-cut of an already numbered episode keeps its number
+        if fixed:
+            episode = int(fixed)
+            title = episode_title(item.get("base_title") or item["yt_title"], episode, item.get("title_suffix"))
+        elif series:
             episode = int(state.setdefault("episodes", {}).get(series, 0)) + 1
             title = episode_title(item.get("base_title") or item["yt_title"], episode, item.get("title_suffix"))
         else:
@@ -464,7 +468,9 @@ def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
         pub = publish_time(cfg, item, datetime.now(timezone.utc))
         vid = yt.upload(path, title, item["yt_description"], item["yt_tags"],
                         cfg["youtube"]["category_id"], comp.get("privacy", "private"), publish_at=pub)
-        if series:
+        if fixed:
+            pass
+        elif series:
             state["episodes"][series] = episode
         else:
             state["episode"] = episode
