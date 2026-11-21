@@ -17,7 +17,7 @@ clip_length:
   ideal_seconds: 30       # up to this length a clip's views count fully ...
   long_penalty: 0.5       # ... a clip at max_seconds counts at 50 % (needs 2x the views of a 30 s clip)
 lookback_hours: 24        # "recent" = clips created in the last N hours
-retention_days: 3         # Drive folders older than this are deleted
+retention_days: 2         # Drive folders older than this are deleted (uploaded videos are deleted right away, except the top Short per streamer)
 drive_root_folder: ClipBot
 
 posting:

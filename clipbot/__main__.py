@@ -75,6 +75,42 @@ def cleanup(cfg: dict, drive, state: dict, today: date) -> None:
     log.info("Cleanup done: %d old queue entries removed", before - len(state["items"]))
 
 
+def prune_uploaded(drive, state: dict) -> int:
+    """Drive is only a short backup: once a video is on YouTube its file is deleted, except the most
+    viewed Short of each streamer per day (kept until retention_days removes the folder).
+    Compilation videos and thumbnails are deleted right after the upload."""
+    top: dict[tuple, dict] = {}
+    for it in state["items"]:
+        if it.get("kind") == "long":
+            continue
+        k = (it.get("creator"), it.get("date"))
+        if k not in top or int(it.get("views") or 0) > int(top[k].get("views") or 0):
+            top[k] = it
+    freed = 0
+    for it in state["items"]:
+        if it.get("status") != "posted":
+            continue
+        if not it.get("video_pruned") and it.get("drive_file_id"):
+            if it.get("kind") == "long" or top.get((it.get("creator"), it.get("date"))) is not it:
+                try:
+                    drive.delete(it["drive_file_id"])
+                    freed += 1
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Could not delete %s from Drive: %s", it.get("file_name"), e)
+                    continue
+                it["video_pruned"] = True
+        for key in ("thumb_drive_id", "thumb_file_id"):
+            if it.get(key) and not it.get(key + "_pruned") and it.get("thumb") not in ("pending",):
+                try:
+                    drive.delete(it[key])
+                except Exception:  # noqa: BLE001
+                    continue
+                it[key + "_pruned"] = True
+    if freed:
+        log.info("Drive: deleted %d uploaded video file(s) (only the top Short per streamer is kept).", freed)
+    return freed
+
+
 # ---------------------------------------------------------------- fetch
 def in_quiet(local: datetime, quiet) -> bool:
     if not quiet:
@@ -361,6 +397,8 @@ def cmd_post(cfg: dict, everything: bool = False) -> None:
         if any(i.get("thumb") == "pending" and i["status"] == "posted" for i in state["items"]):
             with tempfile.TemporaryDirectory() as tmp:
                 set_short_thumbnails(drive, YouTube(), state, Path(tmp))
+        prune_uploaded(drive, state)
+        drive.write_json(QUEUE, state)
         return
     log.info("Uploading %d video(s)%s.", len(due), " (batch)" if everything or batch_mode(cfg) else "")
 
@@ -404,6 +442,8 @@ def cmd_post(cfg: dict, everything: bool = False) -> None:
                 path.unlink(missing_ok=True)
                 drive.write_json(QUEUE, state)
         set_short_thumbnails(drive, yt, state, Path(tmp))
+    prune_uploaded(drive, state)
+    drive.write_json(QUEUE, state)
 
 
 def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
