@@ -739,6 +739,8 @@ Some of the clip titles (written by random viewers, may be slang or jokes): {tit
 
 Write in {language}. Return ONLY a JSON object with:
 - "title": a catchy, specific video title, max 70 characters, based on the best clip titles above.
+  Sound like a real viewer, dry and concrete - never use corny filler: legendární, epický, šílený,
+  neuvěřitelný, absolutní (kino), ikonický, "prostě", "musíte vidět", "nikdo nečekal", "nejlepší momenty".
   Mention 1-3 of the biggest streamer names. No date, no episode number, no hashtags (they are added automatically).
 - "intro": 1-2 natural sentences for the start of the description. Don't invent specific events.
 - "thumbnail_text": 2-4 punchy words for the thumbnail (no streamer names, no emojis).
@@ -756,7 +758,7 @@ def metadata(picks: list[Pick], cfg: dict, day_label: str) -> dict:
     streamers = sorted(counts, key=lambda s: -counts[s])
     d = datetime.fromisoformat(day_label)
     top_names = " & ".join(streamers[:2]) if streamers else "CZ/SK streameři"
-    fallback = {"title": f"{top_names} a další nejlepší momenty dne",
+    fallback = {"title": f"{top_names} a další klipy dne",
                 "intro": "Nejlepší a nejsledovanější momenty z českých a slovenských streamů za poslední den.",
                 "thumbnail_text": "TOP KLIPY DNE",
                 "hashtags": ["czstreamer", "twitchcz", "kickcz", "cesko", "gaming", "klipy"]}

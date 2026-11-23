@@ -23,11 +23,21 @@ Clip info:
 Write in natural, fluent, grammatically correct {language}, the way a Czech/Slovak gaming fan would write
 (casual is fine, slang is fine). Proofread names: the streamer is "{creator}" - spell it exactly like that.
 Return ONLY a JSON object with:
-- "title": a catchy Shorts title, max 70 characters. Stay faithful to the original clip title's meaning -
-  rephrase or tidy it, but don't invent events that the title doesn't suggest. Include the streamer's name
-  if it fits naturally. No hashtags in the title. Max one emoji. NEVER put the game or the stream category
-  in the title (no "FattyPillow ve WoW Forever", "Agraelus v Just Chatting", "X hraje Y") - in the hashtags
-  it is fine. The title is about what happens, not where.
+- "title": a Shorts title, max 60 characters, that sounds like a real Czech/Slovak viewer wrote it in chat -
+  dry, specific, a bit ironic, never like an advert or a news headline. Build it from the concrete thing in the
+  original clip title (a quote, a word, the situation) - quoting the funny part directly is often best.
+  Don't invent events the original title doesn't suggest. Put the streamer's name in naturally (start, middle
+  or end - vary it). No hashtags. Usually NO emoji; at most one, and only if it really adds something.
+  NEVER put the game or the stream category in the title (no "FattyPillow ve WoW Forever",
+  "Agraelus v Just Chatting", "X hraje Y"). The title is about what happens, not where.
+  BANNED - corny filler that makes the channel look cheap (never use these words or phrases, in any form):
+  legendární, epický, šílený, neuvěřitelný, absolutní, ikonický, kultovní, "prostě", "moment(,) který…",
+  "musíte vidět", "stojí za vidění", "nikdo nečekal", "nejde se nezasmát", "nejlepší momenty", "v akci",
+  "tohle je jízda", and the template "<Streamer> a jeho/její …".
+  Bad: "Agraelus a jeho legendární „Hop hop“ 😂", "HaiseT v akci: tenhle moment stojí za vidění 😄",
+  "Kapesník a jeho moment, u kterého se prostě nejde nezasmát".
+  Good: "„Hop hop“ a Agraelus je pryč", "Restt nečekal přepadovku", "Claina jako řidič taxíku v Brně",
+  "Herdyn a číslo 67", "Miken chce nerf na Huntera". Short and concrete beats clever.
 - "line": one short, natural sentence for the description that adds something the title doesn't
   (context, a reaction, a question to viewers). If you have nothing meaningful to add, return "".
   Never write filler like "Clip from the stream of X playing Y".
@@ -66,10 +76,23 @@ def _words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", _ascii(text).lower())
 
 
+BLOCKED_PREFIXES = ("cigos", "cigan", "cikan", "negr", "nigg", "buzer", "teplous", "zidak", "retard", "porn")
+
+CORNY = re.compile(
+    r"legend[aá]rn|epick|[sš][ií]len|neuv[eě][rř]iteln|absolutn|ikonick|kultovn|\bprost[eě]\b|"
+    r"\bmoment\w*,? (kter|u kter)|mus[ií]te vid|stoj[ií] za vid|nikdo ne[cč]ekal|nejde se nezasm|"
+    r"nejlep[sš][ií] moment|\bv akci\b|je j[ií]zda|^\S+( \S+)? a (jeho|jej[ií]) ", re.I)
+
+
+def is_corny(text: str) -> bool:
+    return bool(CORNY.search(text or ""))
+
+
 def is_unsafe(text: str) -> bool:
     words = _words(text)
     joined = "".join(words)
-    return any(w in BLOCKED for w in words) or "nword" in joined or "nigg" in joined
+    return (any(w in BLOCKED or w.startswith(BLOCKED_PREFIXES) for w in words)
+            or "nword" in joined or "nigg" in joined)
 
 
 # Twitch/Kick categories that are not a game - never mentioned in titles, descriptions or tags.
@@ -146,13 +169,25 @@ def generate(clip: Clip, language: str, model: str) -> dict:
     try:
         import anthropic
         client = anthropic.Anthropic()
+        prompt = PROMPT.format(creator=clip.creator, platform=clip.platform.capitalize(), title=clip.title,
+                               game=clip.game or "unknown", language=language) + insights.TEXT
+        msgs = [{"role": "user", "content": prompt}]
         msg = client.messages.create(
             model=model, max_tokens=2000,
             system="You are a caption writer. Reply with one JSON object and nothing else - no prose, no code fences.",
-            messages=[{"role": "user", "content": PROMPT.format(
-                creator=clip.creator, platform=clip.platform.capitalize(), title=clip.title,
-                game=clip.game or "unknown", language=language) + insights.TEXT}],
+            messages=msgs,
         )
+        first = "".join(getattr(b, "text", "") or "" for b in msg.content if getattr(b, "type", "") == "text")
+        if is_corny(first[first.find('"title"'):][:200] if '"title"' in first else first):
+            log.info("Corny title for %s, asking again: %s", clip.clip_id, first[:160].replace("\n", " "))
+            msg = client.messages.create(
+                model=model, max_tokens=2000,
+                system="You are a caption writer. Reply with one JSON object and nothing else - no prose, no code fences.",
+                messages=msgs + [{"role": "assistant", "content": first},
+                                 {"role": "user", "content": "That title uses banned corny filler. Write it again: "
+                                  "short, dry and concrete, no banned words, no '<name> a jeho …', usually no emoji. "
+                                  "Same JSON format."}],
+            )
         text = "".join(getattr(b, "text", "") or "" for b in msg.content if getattr(b, "type", "") == "text")
         start, end = text.find("{"), text.rfind("}")
         if start == -1 or end <= start:
@@ -170,6 +205,10 @@ def generate(clip: Clip, language: str, model: str) -> dict:
             raise ValueError(f"title was only streamer + game: {data['title']!r}")
         if not data.get("title"):
             raise ValueError("empty title")
+        if is_corny(data["title"]):
+            log.warning("Title for %s still corny (%r), using the cleaned clip title", clip.clip_id, data["title"])
+            fb = _fallback(clip)
+            data["title"] = fb["title"]
         if is_unsafe(data["title"]) or is_unsafe(data.get("line", "")):
             log.warning("AI caption for %s still contained a blocked word, using neutral title", clip.clip_id)
             return _fallback(Clip(**{**clip.__dict__, "title": ""}))
