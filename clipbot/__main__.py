@@ -405,11 +405,15 @@ def cmd_post(cfg: dict, everything: bool = False) -> None:
     yt = YouTube()
     y = cfg["youtube"]
     channels = {c["name"]: c["channel"] for c in cfg["creators"]}
+    due.sort(key=lambda i: i.get("kind") != "long")  # the compilation goes first
     with tempfile.TemporaryDirectory() as tmp:
         for item in due:
             path = Path(tmp) / item["file_name"]
             if item.get("kind") == "long":
-                post_long(cfg, drive, yt, state, item, Path(tmp))
+                try:
+                    post_long(cfg, drive, yt, state, item, Path(tmp))
+                except UploadLimit:
+                    break
                 continue
             if not item.get("ai_caption"):
                 recaption(cfg, item, channels)
@@ -428,10 +432,10 @@ def cmd_post(cfg: dict, everything: bool = False) -> None:
                 log.info("Uploaded %s -> https://youtube.com/shorts/%s%s", item["file_name"], vid,
                          f" (YouTube publishes it at {pub})" if pub else "")
             except HttpError as e:
-                item["attempts"] += 1
-                if "quotaExceeded" in str(e) or "uploadLimitExceeded" in str(e):
+                if is_upload_limit(e):
                     log.error("YouTube upload limit reached — will retry next run.")
                     break
+                item["attempts"] += 1
                 log.exception("YouTube upload failed for %s", item["file_name"])
             except Exception:  # noqa: BLE001
                 item["attempts"] += 1
@@ -444,6 +448,17 @@ def cmd_post(cfg: dict, everything: bool = False) -> None:
         set_short_thumbnails(drive, yt, state, Path(tmp))
     prune_uploaded(drive, state)
     drive.write_json(QUEUE, state)
+
+
+def is_upload_limit(e: Exception) -> bool:
+    """YouTube's per-channel upload cap or the API quota - not the video's fault, so it doesn't count
+    as a failed attempt; everything waits for the next run."""
+    t = str(e)
+    return any(k in t for k in ("uploadLimitExceeded", "quotaExceeded", "exceeded the number of videos"))
+
+
+class UploadLimit(Exception):
+    pass
 
 
 def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
@@ -489,7 +504,10 @@ def post_long(cfg: dict, drive, yt, state: dict, item: dict, tmp: Path) -> None:
                 log.info("Thumbnail set.")
             except HttpError as e:
                 log.warning("Could not set the thumbnail (is the channel phone-verified?): %s", e)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        if is_upload_limit(e):
+            log.error("YouTube upload limit reached - the compilation waits for the next run.")
+            raise UploadLimit() from e
         item["attempts"] += 1
         log.exception("Posting the compilation failed")
         if item["attempts"] >= 3:
