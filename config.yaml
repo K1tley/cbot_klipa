@@ -9,7 +9,10 @@ timezone: Europe/Prague
 # .github/workflows/fetch.yml (see the comment there).
 fetch_hour: 4
 
-clips_per_creator: 3      # take up to this many top clips per creator
+clips_per_creator: 1      # take up to this many top clips per creator
+scene_shorts:             # + the most viewed clips of the whole CZ/SK scene that day (max 1 per streamer)
+  count: 3
+  min_views: 50
 
 # Clip length rules (Shorts AND the compilation):
 clip_length:

@@ -75,6 +75,67 @@ def cleanup(cfg: dict, drive, state: dict, today: date) -> None:
     log.info("Cleanup done: %d old queue entries removed", before - len(state["items"]))
 
 
+def _same_scene(a, b, seconds: float = 45) -> bool:
+    """Two streamers playing together: clips made within ~45 s of each other are probably the same
+    moment from two POVs (and Twitch + Kick simulcast of one streamer)."""
+    ta, tb = sources._parse_time(a.created_at), sources._parse_time(b.created_at)
+    return bool(ta and tb) and abs((ta - tb).total_seconds()) <= seconds
+
+
+def scene_top_clips(cfg: dict, drive, since, until, today, already: list, seen: dict) -> list:
+    """The N most viewed clips of the whole CZ/SK scene today (channels found by `discover` + the
+    creators), on top of each creator's best clip. Max 1 per streamer, never a clip we already have."""
+    from . import compilation as C
+    sc = cfg.get("scene_shorts") or {}
+    n = int(sc.get("count", 3))
+    if n <= 0:
+        return []
+    data = drive.read_json(C.CHANNELS, C.empty_channels())
+    pool = C.channel_pool(cfg, data, today)
+    tw_pool = [c for c in pool if c["platform"] == "twitch"]
+    tw = sources.Twitch() if tw_pool else None
+    missing = [c["channel"] for c in tw_pool if not c.get("id")]
+    if missing:
+        ids = tw.user_ids(missing)
+        for c in tw_pool:
+            c["id"] = c.get("id") or ids.get(c["channel"])
+    kick = None
+    rules = {**sources.DEFAULT_LENGTH, **(cfg.get("clip_length") or {})}
+    have = {f"{c.platform}:{c.clip_id}" for c in already} | set(seen)
+    min_views = int(sc.get("min_views", 50))
+    cands = []
+    for c in pool:
+        try:
+            if c["platform"] == "twitch" and c.get("id"):
+                got = tw.top_clips(c.get("name", c["channel"]), c["channel"], since, until, broadcaster_id=c["id"], limit=20)
+            elif c["platform"] == "kick" and c.get("favorite"):
+                kick = kick or sources.Kick()
+                got = kick.top_clips(c.get("name", c["channel"]), c["channel"], since, until)
+            else:
+                continue
+        except Exception as e:  # noqa: BLE001
+            log.warning("Clips for %s failed: %s", c["channel"], e)
+            continue
+        for x in got:
+            if (f"{x.platform}:{x.clip_id}" in have or x.views < min_views or captions.is_unsafe(x.title or "")
+                    or sources.length_factor(x.duration, rules) is None):
+                continue
+            cands.append(x)
+    cands.sort(key=lambda x: -x.views)
+    out, used = [], set()
+    for x in cands:
+        if len(out) >= n:
+            break
+        who = x.creator.strip().lower()
+        if who in used or any(sources.same_moment(x, y) or _same_scene(x, y) for y in already + out):
+            continue
+        used.add(who)
+        out.append(x)
+    log.info("Top CZ/SK clips today (%d candidates from %d channels): %s", len(cands), len(pool),
+             ", ".join(f"{x.creator} {x.views}" for x in out) or "-")
+    return out
+
+
 def prune_uploaded(drive, state: dict) -> int:
     """Drive is only a short backup: once a video is on YouTube its file is deleted, except the most
     viewed Short of each streamer per day (kept until retention_days removes the folder).
@@ -195,6 +256,10 @@ def cmd_fetch(cfg: dict, force: bool) -> None:
     clips = sources.collect(cfg["creators"], now - lookback, now, int(cfg["clips_per_creator"]),
                             cfg.get("clip_length"))
     clips = [c for c in clips if f"{c.platform}:{c.clip_id}" not in state["seen"]]
+    try:
+        clips += scene_top_clips(cfg, drive, now - lookback, now, local.date(), clips, state["seen"])
+    except Exception:  # noqa: BLE001 - the extra clips must never stop the normal Shorts
+        log.exception("Top CZ/SK clips failed")
 
     by_creator: dict[str, list] = defaultdict(list)
     for c in clips:
